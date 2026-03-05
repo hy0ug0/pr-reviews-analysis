@@ -8,8 +8,7 @@ Local tool to analyze PR review activity using GitHub data.
 
 ## Requirements
 
-- [Node.js](https://nodejs.org/) 22+
-- [pnpm](https://pnpm.io/) (or run `corepack enable`)
+- [Bun](https://bun.sh/) 1.3+
 - [GitHub CLI](https://cli.github.com/) installed and authenticated
 
 ```bash
@@ -20,7 +19,7 @@ gh auth status
 ## Setup
 
 ```bash
-pnpm install
+bun install
 cp .env.example .env
 ```
 
@@ -36,7 +35,7 @@ cp .env.example .env
 ## Run
 
 ```bash
-pnpm run dev
+bun run dev
 ```
 
 - App: [http://localhost:5173](http://localhost:5173)
@@ -45,5 +44,5 @@ pnpm run dev
 For non-watch mode:
 
 ```bash
-pnpm start
+bun start
 ```

@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { serve } from "@hono/node-server";
 import { zValidator } from "@hono/zod-validator";
 import { execFileSync } from "node:child_process";
 import { fetchPullRequests } from "./github.ts";
@@ -8,8 +7,6 @@ import { createLogger } from "./logger.ts";
 import type { AnalyzeParams } from "../shared/types.ts";
 import { analyzeQuerySchema } from "../shared/schemas.ts";
 import { buildCacheKey, getCacheConfig, readCache, writeCache } from "./cache.ts";
-
-process.loadEnvFile(".env");
 
 const log = createLogger("server");
 
@@ -25,6 +22,7 @@ const app = new Hono();
 const DEFAULT_REPOS = process.env.DEFAULT_REPOS ?? "";
 const DEFAULT_LABEL = process.env.DEFAULT_LABEL ?? "";
 const DEFAULT_TEAM = process.env.DEFAULT_TEAM ?? "";
+
 const { cacheDir, ttlHours } = getCacheConfig();
 
 log.info(`Local cache enabled at ${cacheDir} (TTL: ${ttlHours}h)`);
@@ -105,6 +103,6 @@ app.get(
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
-serve({ fetch: app.fetch, port: PORT }, () => {
-  log.info(`PR Reviews Analysis running at http://localhost:${PORT}`);
-});
+log.info(`PR Reviews Analysis running at http://localhost:${PORT}`);
+
+export default { port: PORT, fetch: app.fetch };
