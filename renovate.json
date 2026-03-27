@@ -1,0 +1,119 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:best-practices",
+    ":dependencyDashboard"
+  ],
+  "timezone": "Europe/Paris",
+  "labels": [
+    "dependencies"
+  ],
+  "rangeStrategy": "bump",
+  "rebaseWhen": "conflicted",
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 10,
+  "ignoreTests": true,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 5am on monday"
+    ],
+    "automerge": true,
+    "automergeType": "branch"
+  },
+  "packageRules": [
+    {
+      "description": "Silently merge safe Bun/npm updates for a low-friction personal repo.",
+      "matchManagers": [
+        "bun",
+        "npm"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest",
+        "lockFileMaintenance"
+      ],
+      "matchCurrentVersion": "!/^0\\./",
+      "automerge": true,
+      "automergeType": "branch"
+    },
+    {
+      "description": "Be aggressive with tooling majors that are usually straightforward to fix.",
+      "matchManagers": [
+        "bun",
+        "npm"
+      ],
+      "matchDepTypes": [
+        "devDependencies"
+      ],
+      "matchPackageNames": [
+        "@types/**",
+        "@vitejs/plugin-react",
+        "@tailwindcss/vite",
+        "concurrently",
+        "oxfmt",
+        "oxlint",
+        "oxlint-tsgolint",
+        "tailwindcss",
+        "typescript",
+        "vite"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": true,
+      "automergeType": "pr"
+    },
+    {
+      "groupName": "react stack",
+      "matchPackageNames": [
+        "react",
+        "react-dom",
+        "@types/react",
+        "@types/react-dom",
+        "react-chartjs-2",
+        "chart.js"
+      ]
+    },
+    {
+      "groupName": "vite and tailwind toolchain",
+      "matchPackageNames": [
+        "vite",
+        "@vitejs/plugin-react",
+        "tailwindcss",
+        "@tailwindcss/vite",
+        "typescript"
+      ]
+    },
+    {
+      "groupName": "lint and format tooling",
+      "matchPackageNames": [
+        "oxfmt",
+        "oxlint",
+        "oxlint-tsgolint",
+        "@types/node",
+        "concurrently"
+      ]
+    },
+    {
+      "groupName": "server stack",
+      "matchPackageNames": [
+        "hono",
+        "@hono/zod-validator",
+        "zod",
+        "consola"
+      ]
+    },
+    {
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "labels": [
+        "dependencies",
+        "major"
+      ]
+    }
+  ]
+}
