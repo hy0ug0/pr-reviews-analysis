@@ -28,10 +28,10 @@
     "clean": "rm -rf node_modules bun.lock dist .vite && echo 'Cleaned. Run bun install to reinstall.'"
   },
   "dependencies": {
-    "@hono/zod-validator": "^0.7.6",
+    "@hono/zod-validator": "^0.8.0",
     "chart.js": "^4.5.1",
     "consola": "^3.4.2",
-    "hono": "^4.12.18",
+    "hono": "^4.12.19",
     "react": "^19.2.6",
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.2.6",
