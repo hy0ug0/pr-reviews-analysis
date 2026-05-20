@@ -31,6 +31,7 @@ cp .env.example .env
 - `DEFAULT_TEAM`: pre-filled team members (comma-separated GitHub handles)
 - `CACHE_TTL_HOURS`: cache time-to-live in hours
 - `CACHE_DIR`: cache directory path
+- `ANALYZE_IDLE_TIMEOUT_SECONDS`: Bun idle timeout for `/api/analyze`, in seconds. Defaults to `0`, which disables the timeout for this long-running local route. Finite values must be `1..255`.
 
 ## Run
 

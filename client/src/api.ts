@@ -14,6 +14,30 @@ function isAppDefaults(value: unknown): value is AppDefaults {
   );
 }
 
+async function readJsonResponse(response: Response, fallbackMessage: string): Promise<unknown> {
+  const body = await response.text();
+  let data: unknown = null;
+
+  if (body.trim()) {
+    try {
+      data = JSON.parse(body);
+    } catch {
+      if (!response.ok) {
+        throw new Error(body.trim() || fallbackMessage);
+      }
+      throw new Error("Unexpected non-JSON response from server");
+    }
+  }
+
+  if (!response.ok) {
+    const message =
+      isObjectRecord(data) && typeof data.error === "string" ? data.error : fallbackMessage;
+    throw new Error(message);
+  }
+
+  return data;
+}
+
 function getDateRange(preset: TimeRangePreset): { since: string; until: string } {
   const now = new Date();
   const until = now.toISOString().split("T")[0];
@@ -51,8 +75,7 @@ function getDateRange(preset: TimeRangePreset): { since: string; until: string }
 
 export async function fetchDefaults(): Promise<AppDefaults> {
   const response = await fetch("/api/defaults");
-  if (!response.ok) throw new Error("Failed to load defaults");
-  const data: unknown = await response.json();
+  const data = await readJsonResponse(response, "Failed to load defaults");
   if (!isAppDefaults(data)) throw new Error("Invalid defaults payload");
   return data;
 }
@@ -73,13 +96,16 @@ export async function fetchAnalysis(values: AnalyzeFormValues): Promise<Analysis
     params.set("until", range.until);
   }
 
-  const response = await fetch(`/api/analyze?${params}`);
-  const data: unknown = await response.json();
-  if (!response.ok) {
-    const msg =
-      isObjectRecord(data) && typeof data.error === "string" ? data.error : "Failed to analyze";
-    throw new Error(msg);
+  let response: Response;
+  try {
+    response = await fetch(`/api/analyze?${params}`);
+  } catch {
+    throw new Error(
+      "The analysis request was interrupted before the server returned a response. Large GitHub fetches can take several minutes; try again or narrow the date range.",
+    );
   }
+
+  const data = await readJsonResponse(response, "Failed to analyze");
   const parsed = analysisResultSchema.safeParse(data);
   if (!parsed.success) throw new Error("Unexpected response format from server");
   return parsed.data;

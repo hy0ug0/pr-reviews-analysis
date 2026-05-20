@@ -1,13 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:best-practices",
-    ":dependencyDashboard"
-  ],
+  "extends": ["config:best-practices", ":dependencyDashboard"],
   "timezone": "Europe/Paris",
-  "labels": [
-    "dependencies"
-  ],
+  "labels": ["dependencies"],
   "rangeStrategy": "bump",
   "rebaseWhen": "conflicted",
   "prHourlyLimit": 0,
@@ -15,39 +10,23 @@
   "ignoreTests": true,
   "lockFileMaintenance": {
     "enabled": true,
-    "schedule": [
-      "before 5am on monday"
-    ],
+    "schedule": ["before 5am on monday"],
     "automerge": true,
     "automergeType": "branch"
   },
   "packageRules": [
     {
       "description": "Silently merge safe Bun/npm updates for a low-friction personal repo.",
-      "matchManagers": [
-        "bun",
-        "npm"
-      ],
-      "matchUpdateTypes": [
-        "minor",
-        "patch",
-        "pin",
-        "digest",
-        "lockFileMaintenance"
-      ],
+      "matchManagers": ["bun", "npm"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
       "matchCurrentVersion": "!/^0\\./",
       "automerge": true,
       "automergeType": "branch"
     },
     {
       "description": "Be aggressive with tooling majors that are usually straightforward to fix.",
-      "matchManagers": [
-        "bun",
-        "npm"
-      ],
-      "matchDepTypes": [
-        "devDependencies"
-      ],
+      "matchManagers": ["bun", "npm"],
+      "matchDepTypes": ["devDependencies"],
       "matchPackageNames": [
         "@types/**",
         "@vitejs/plugin-react",
@@ -60,9 +39,7 @@
         "typescript",
         "vite"
       ],
-      "matchUpdateTypes": [
-        "major"
-      ],
+      "matchUpdateTypes": ["major"],
       "automerge": true,
       "automergeType": "pr"
     },
@@ -89,31 +66,15 @@
     },
     {
       "groupName": "lint and format tooling",
-      "matchPackageNames": [
-        "oxfmt",
-        "oxlint",
-        "oxlint-tsgolint",
-        "@types/node",
-        "concurrently"
-      ]
+      "matchPackageNames": ["oxfmt", "oxlint", "oxlint-tsgolint", "@types/node", "concurrently"]
     },
     {
       "groupName": "server stack",
-      "matchPackageNames": [
-        "hono",
-        "@hono/zod-validator",
-        "zod",
-        "consola"
-      ]
+      "matchPackageNames": ["hono", "@hono/zod-validator", "zod", "consola"]
     },
     {
-      "matchUpdateTypes": [
-        "major"
-      ],
-      "labels": [
-        "dependencies",
-        "major"
-      ]
+      "matchUpdateTypes": ["major"],
+      "labels": ["dependencies", "major"]
     }
   ]
 }

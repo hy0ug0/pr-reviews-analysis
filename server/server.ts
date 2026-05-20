@@ -22,10 +22,37 @@ const app = new Hono();
 const DEFAULT_REPOS = process.env.DEFAULT_REPOS ?? "";
 const DEFAULT_LABEL = process.env.DEFAULT_LABEL ?? "";
 const DEFAULT_TEAM = process.env.DEFAULT_TEAM ?? "";
+const DEFAULT_ANALYZE_IDLE_TIMEOUT_SECONDS = 0;
+
+interface BunServerWithTimeout {
+  timeout(req: Request, seconds: number): void;
+}
+
+function parseAnalyzeIdleTimeoutSeconds(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") return DEFAULT_ANALYZE_IDLE_TIMEOUT_SECONDS;
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 255) {
+    log.warn(
+      `Invalid ANALYZE_IDLE_TIMEOUT_SECONDS="${value}". Expected an integer from 0 to 255; using ${DEFAULT_ANALYZE_IDLE_TIMEOUT_SECONDS}.`,
+    );
+    return DEFAULT_ANALYZE_IDLE_TIMEOUT_SECONDS;
+  }
+
+  return parsed;
+}
 
 const { cacheDir, ttlHours } = getCacheConfig();
+const analyzeIdleTimeoutSeconds = parseAnalyzeIdleTimeoutSeconds(
+  process.env.ANALYZE_IDLE_TIMEOUT_SECONDS,
+);
 
 log.info(`Local cache enabled at ${cacheDir} (TTL: ${ttlHours}h)`);
+log.info(
+  analyzeIdleTimeoutSeconds === 0
+    ? "Analyze request idle timeout disabled"
+    : `Analyze request idle timeout set to ${analyzeIdleTimeoutSeconds}s`,
+);
 
 app.get("/api/defaults", (c) => {
   return c.json({ repos: DEFAULT_REPOS, label: DEFAULT_LABEL, team: DEFAULT_TEAM });
@@ -105,4 +132,13 @@ const PORT = parseInt(process.env.PORT || "3000", 10);
 
 log.info(`PR Reviews Analysis running at http://localhost:${PORT}`);
 
-export default { port: PORT, fetch: app.fetch };
+export default {
+  port: PORT,
+  fetch(req: Request, server?: BunServerWithTimeout) {
+    if (server && new URL(req.url).pathname === "/api/analyze") {
+      server.timeout(req, analyzeIdleTimeoutSeconds);
+    }
+
+    return app.fetch(req);
+  },
+};
