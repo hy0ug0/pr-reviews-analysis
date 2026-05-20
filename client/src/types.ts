@@ -1,6 +1,7 @@
 import type { TimeRangePreset } from "../../shared/types";
 
 export type {
+  AppSuggestion,
   ReviewerStats,
   AnalysisResult,
   AppDefaults,

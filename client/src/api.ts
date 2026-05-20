@@ -1,5 +1,11 @@
 import { analysisResultSchema } from "../../shared/schemas";
-import type { AnalysisResult, AnalyzeFormValues, AppDefaults, TimeRangePreset } from "./types";
+import type {
+  AnalysisResult,
+  AnalyzeFormValues,
+  AppDefaults,
+  AppSuggestion,
+  TimeRangePreset,
+} from "./types";
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -11,6 +17,24 @@ function isAppDefaults(value: unknown): value is AppDefaults {
     typeof value.repos === "string" &&
     typeof value.label === "string" &&
     typeof value.team === "string"
+  );
+}
+
+function isAppSuggestion(value: unknown): value is AppSuggestion {
+  return (
+    isObjectRecord(value) &&
+    typeof value.value === "string" &&
+    (value.detail === undefined || typeof value.detail === "string") &&
+    (value.color === undefined || typeof value.color === "string") &&
+    (value.isPrivate === undefined || typeof value.isPrivate === "boolean")
+  );
+}
+
+function isSuggestionsPayload(value: unknown): value is { suggestions: AppSuggestion[] } {
+  return (
+    isObjectRecord(value) &&
+    Array.isArray(value.suggestions) &&
+    value.suggestions.every(isAppSuggestion)
   );
 }
 
@@ -78,6 +102,21 @@ export async function fetchDefaults(): Promise<AppDefaults> {
   const data = await readJsonResponse(response, "Failed to load defaults");
   if (!isAppDefaults(data)) throw new Error("Invalid defaults payload");
   return data;
+}
+
+export async function fetchSuggestions(
+  kind: "repos" | "labels" | "users",
+  values: { query: string; repo?: string },
+  signal?: AbortSignal,
+): Promise<AppSuggestion[]> {
+  const params = new URLSearchParams();
+  if (values.query) params.set("q", values.query);
+  if (values.repo) params.set("repo", values.repo);
+
+  const response = await fetch(`/api/suggestions/${kind}?${params}`, { signal });
+  const data = await readJsonResponse(response, "Failed to load suggestions");
+  if (!isSuggestionsPayload(data)) throw new Error("Invalid suggestions payload");
+  return data.suggestions;
 }
 
 export async function fetchAnalysis(values: AnalyzeFormValues): Promise<AnalysisResult> {

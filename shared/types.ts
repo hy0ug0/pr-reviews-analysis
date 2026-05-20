@@ -56,3 +56,10 @@ export interface AppDefaults {
   label: string;
   team: string;
 }
+
+export interface AppSuggestion {
+  value: string;
+  detail?: string;
+  color?: string;
+  isPrivate?: boolean;
+}

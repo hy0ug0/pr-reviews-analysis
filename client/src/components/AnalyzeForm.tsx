@@ -1,6 +1,14 @@
-import { useState, useEffect, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import { analyzeFormSchema, timeRangePresets } from "../../../shared/schemas";
-import type { AnalyzeFormValues, AppDefaults, TimeRangePreset } from "../types";
+import { fetchSuggestions } from "../api";
+import type { AnalyzeFormValues, AppDefaults, AppSuggestion, TimeRangePreset } from "../types";
 
 const timeRangeSet: ReadonlySet<string> = new Set(timeRangePresets);
 
@@ -22,6 +30,218 @@ const inputErrorClass = `${baseInputClass} border-red-400 dark:border-red-600`;
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
   return <p className="text-xs text-red-500 dark:text-red-400 mt-1">{message}</p>;
+}
+
+type SuggestionKind = "repos" | "labels" | "users";
+
+interface TokenInfo {
+  query: string;
+  replaceStart: number;
+  replaceEnd: number;
+}
+
+function getTokenInfo(value: string, cursor: number): TokenInfo {
+  const beforeCursor = value.slice(0, cursor);
+  const previousComma = beforeCursor.lastIndexOf(",");
+  const nextComma = value.indexOf(",", cursor);
+  const rawStart = previousComma + 1;
+  const rawEnd = nextComma === -1 ? value.length : nextComma;
+  const rawToken = value.slice(rawStart, rawEnd);
+  const leadingSpaces = rawToken.match(/^\s*/)?.[0].length ?? 0;
+  const trailingSpaces = rawToken.match(/\s*$/)?.[0].length ?? 0;
+
+  return {
+    query: rawToken.trim(),
+    replaceStart: rawStart + leadingSpaces,
+    replaceEnd: rawEnd - trailingSpaces,
+  };
+}
+
+interface AutocompleteInputProps {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  className: string;
+  kind: SuggestionKind;
+  repo?: string;
+  multi?: boolean;
+}
+
+function AutocompleteInput({
+  id,
+  value,
+  onChange,
+  placeholder,
+  className,
+  kind,
+  repo,
+  multi = false,
+}: AutocompleteInputProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [cursor, setCursor] = useState(value.length);
+  const [focused, setFocused] = useState(false);
+  const [suggestions, setSuggestions] = useState<AppSuggestion[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+
+  const token = multi ? getTokenInfo(value, cursor) : null;
+  const activeQuery = multi ? (token?.query ?? "") : value.trim();
+  const showMenu = focused && (loadingSuggestions || suggestions.length > 0);
+
+  useEffect(() => {
+    setSuggestions([]);
+    setHighlightedIndex(0);
+  }, [activeQuery, kind, repo]);
+
+  useEffect(() => {
+    if (!focused) return;
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      setLoadingSuggestions(true);
+      fetchSuggestions(kind, { query: activeQuery, repo }, controller.signal)
+        .then((items) => {
+          setSuggestions(items);
+          setHighlightedIndex(0);
+        })
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+          setSuggestions([]);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setLoadingSuggestions(false);
+        });
+    }, 180);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [activeQuery, focused, kind, repo]);
+
+  const syncCursor = (target: HTMLInputElement) => {
+    setCursor(target.selectionStart ?? target.value.length);
+  };
+
+  const commitSuggestion = (suggestion: AppSuggestion) => {
+    let nextValue = suggestion.value;
+    let nextCursor = suggestion.value.length;
+
+    if (multi) {
+      const latestCursor = inputRef.current?.selectionStart ?? cursor;
+      const latestToken = getTokenInfo(value, latestCursor);
+      nextValue =
+        value.slice(0, latestToken.replaceStart) +
+        suggestion.value +
+        value.slice(latestToken.replaceEnd);
+      nextCursor = latestToken.replaceStart + suggestion.value.length;
+    }
+
+    onChange(nextValue);
+    setCursor(nextCursor);
+    setFocused(false);
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextCursor, nextCursor);
+    });
+  };
+
+  const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
+    syncCursor(event.target);
+    onChange(event.target.value);
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (!showMenu) return;
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setHighlightedIndex((index) => Math.min(index + 1, suggestions.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightedIndex((index) => Math.max(index - 1, 0));
+    } else if (event.key === "Enter" && suggestions[highlightedIndex]) {
+      event.preventDefault();
+      commitSuggestion(suggestions[highlightedIndex]);
+    } else if (event.key === "Escape") {
+      setFocused(false);
+    }
+  };
+
+  return (
+    <div className="relative">
+      <input
+        ref={inputRef}
+        type="text"
+        id={id}
+        value={value}
+        onChange={handleChange}
+        onFocus={(event) => {
+          syncCursor(event.currentTarget);
+          setFocused(true);
+        }}
+        onBlur={() => window.setTimeout(() => setFocused(false), 120)}
+        onClick={(event) => syncCursor(event.currentTarget)}
+        onKeyUp={(event) => syncCursor(event.currentTarget)}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        className={className}
+        autoComplete="off"
+        role="combobox"
+        aria-expanded={showMenu}
+        aria-autocomplete="list"
+        aria-controls={`${id}-suggestions`}
+      />
+      {showMenu && (
+        <div
+          id={`${id}-suggestions`}
+          role="listbox"
+          className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-900"
+        >
+          {loadingSuggestions && suggestions.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-gray-500 dark:text-slate-400">Loading...</div>
+          ) : (
+            suggestions.map((suggestion, index) => (
+              <button
+                key={`${suggestion.value}-${index}`}
+                type="button"
+                role="option"
+                aria-selected={index === highlightedIndex}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => commitSuggestion(suggestion)}
+                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm ${
+                  index === highlightedIndex
+                    ? "bg-gray-100 text-gray-950 dark:bg-slate-800 dark:text-slate-50"
+                    : "text-gray-800 hover:bg-gray-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                }`}
+              >
+                {suggestion.color && (
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: `#${suggestion.color}` }}
+                  />
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{suggestion.value}</span>
+                  {suggestion.detail && (
+                    <span className="block truncate text-xs text-gray-500 dark:text-slate-400">
+                      {suggestion.detail}
+                    </span>
+                  )}
+                </span>
+                {suggestion.isPrivate && (
+                  <span className="shrink-0 rounded border border-gray-200 px-1.5 py-0.5 text-xs text-gray-500 dark:border-slate-700 dark:text-slate-400">
+                    Private
+                  </span>
+                )}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function AnalyzeForm({ onSubmit, loading, defaults }: AnalyzeFormProps) {
@@ -87,13 +307,14 @@ export function AnalyzeForm({ onSubmit, loading, defaults }: AnalyzeFormProps) {
             >
               Repository
             </label>
-            <input
-              type="text"
+            <AutocompleteInput
               id="repo"
               value={form.repo}
-              onChange={(e) => update("repo", e.target.value)}
+              onChange={(value) => update("repo", value)}
               placeholder="owner/repo"
               className={errors.repo ? inputErrorClass : inputClass}
+              kind="repos"
+              multi
             />
             <FieldError message={errors.repo} />
             {!errors.repo && (
@@ -111,13 +332,14 @@ export function AnalyzeForm({ onSubmit, loading, defaults }: AnalyzeFormProps) {
               Label{" "}
               <span className="text-gray-400 dark:text-slate-500 font-normal">(optional)</span>
             </label>
-            <input
-              type="text"
+            <AutocompleteInput
               id="label"
               value={form.label}
-              onChange={(e) => update("label", e.target.value)}
+              onChange={(value) => update("label", value)}
               placeholder='e.g. "bug"'
               className={errors.label ? inputErrorClass : inputClass}
+              kind="labels"
+              repo={form.repo}
             />
             <FieldError message={errors.label} />
           </div>
@@ -156,13 +378,15 @@ export function AnalyzeForm({ onSubmit, loading, defaults }: AnalyzeFormProps) {
               Team Members{" "}
               <span className="text-gray-400 dark:text-slate-500 font-normal">(optional)</span>
             </label>
-            <input
-              type="text"
+            <AutocompleteInput
               id="team"
               value={form.team}
-              onChange={(e) => update("team", e.target.value)}
+              onChange={(value) => update("team", value)}
               placeholder="user1, user2, ..."
               className={errors.team ? inputErrorClass : inputClass}
+              kind="users"
+              repo={form.repo}
+              multi
             />
             <FieldError message={errors.team} />
             {!errors.team && (

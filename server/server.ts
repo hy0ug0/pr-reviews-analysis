@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { execFileSync } from "node:child_process";
-import { fetchPullRequests } from "./github.ts";
+import {
+  fetchLabelSuggestions,
+  fetchPullRequests,
+  fetchRepositorySuggestions,
+  fetchUserSuggestions,
+} from "./github.ts";
 import { analyze } from "./analyzer.ts";
 import { createLogger } from "./logger.ts";
 import type { AnalyzeParams } from "../shared/types.ts";
@@ -56,6 +61,31 @@ log.info(
 
 app.get("/api/defaults", (c) => {
   return c.json({ repos: DEFAULT_REPOS, label: DEFAULT_LABEL, team: DEFAULT_TEAM });
+});
+
+app.get("/api/suggestions/repos", async (c) => {
+  const query = c.req.query("q") ?? "";
+  const defaultRepos = DEFAULT_REPOS.split(",")
+    .map((repo) => repo.trim())
+    .filter(Boolean);
+  const suggestions = await fetchRepositorySuggestions(query, defaultRepos);
+  return c.json({ suggestions });
+});
+
+app.get("/api/suggestions/labels", async (c) => {
+  const query = c.req.query("q") ?? "";
+  const repo = c.req.query("repo") ?? DEFAULT_REPOS;
+  const suggestions = await fetchLabelSuggestions(repo, query, DEFAULT_LABEL);
+  return c.json({ suggestions });
+});
+
+app.get("/api/suggestions/users", async (c) => {
+  const query = c.req.query("q") ?? "";
+  const defaultUsers = DEFAULT_TEAM.split(",")
+    .map((user) => user.trim())
+    .filter(Boolean);
+  const suggestions = await fetchUserSuggestions(query, defaultUsers);
+  return c.json({ suggestions });
 });
 
 app.get(
