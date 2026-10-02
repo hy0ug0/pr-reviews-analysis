@@ -2,7 +2,10 @@ import type { PullRequest, AnalyzeParams, AnalysisResult, ReviewerStats } from "
 
 export function analyze(prs: PullRequest[], params: AnalyzeParams): AnalysisResult {
   const reviewerMap = new Map<string, ReviewerStats>();
-  const teamSet = params.teamMembers?.length ? new Set(params.teamMembers) : null;
+  // GitHub logins are case-insensitive; the API returns the canonical casing.
+  const teamSet = params.teamMembers?.length
+    ? new Set(params.teamMembers.map((member) => member.toLowerCase()))
+    : null;
 
   let totalReviews = 0;
   const sinceISO = params.since || "";
@@ -16,7 +19,7 @@ export function analyze(prs: PullRequest[], params: AnalyzeParams): AnalysisResu
       const reviewer = review.author?.login;
       if (!reviewer) continue;
       if (reviewer === prAuthor) continue;
-      if (teamSet && !teamSet.has(reviewer)) continue;
+      if (teamSet && !teamSet.has(reviewer.toLowerCase())) continue;
       if (review.state === "DISMISSED" || review.state === "PENDING") continue;
       if (sinceISO && review.submittedAt && review.submittedAt < sinceISO) continue;
       if (untilISO && review.submittedAt && review.submittedAt > untilISO) continue;
