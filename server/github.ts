@@ -505,7 +505,7 @@ export async function fetchUserSuggestions(
 
   try {
     const data = await ghGraphqlWithRetry<UserSearchResponse>(USER_SEARCH_QUERY, {
-      searchQuery: `${trimmed} in:login type:user`,
+      searchQuery: `${trimmed} in:login in:name type:user`,
       first: 12,
     });
     const githubSuggestions = data.search.nodes
