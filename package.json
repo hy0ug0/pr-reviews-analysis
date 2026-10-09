@@ -25,7 +25,7 @@
     "check:server": "bun run typecheck:server && bun run lint:server && bun run format:check:server",
     "check:client": "bun run typecheck:client && bun run lint:client && bun run format:check:client",
     "check": "bun run typecheck && bun run lint && bun run format:check",
-    "test": "bun test",
+    "test": "bun test --isolate",
     "clean": "rm -rf node_modules bun.lock dist .vite && echo 'Cleaned. Run bun install to reinstall.'"
   },
   "dependencies": {

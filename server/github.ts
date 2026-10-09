@@ -370,13 +370,6 @@ function buildSearchQuery(repo: string, label?: string, since?: string, until?: 
   return query;
 }
 
-function splitList(value: string | undefined): string[] {
-  return (value ?? "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 function matchesSuggestionSeed(value: string, query: string): boolean {
   return query === "" || value.toLowerCase().includes(query.toLowerCase());
 }
@@ -506,7 +499,7 @@ export async function fetchRepositorySuggestions(
 }
 
 export async function fetchLabelSuggestions(
-  repoInput: string,
+  repoList: readonly string[],
   query: string,
   defaultLabel?: string,
 ): Promise<AppSuggestion[]> {
@@ -516,7 +509,7 @@ export async function fetchLabelSuggestions(
       ? [{ value: defaultLabel, detail: "Default label" }]
       : [];
   const suggestions: AppSuggestion[] = [...seedSuggestions];
-  const repos = splitList(repoInput).slice(0, 5);
+  const repos = repoList.slice(0, 5);
 
   for (const repo of repos) {
     let parsed: { owner: string; name: string };
