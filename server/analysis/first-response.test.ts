@@ -5,7 +5,7 @@ import {
   type PRReview,
   type PullRequest,
   type ReviewState,
-} from "../shared/types.ts";
+} from "../../shared/types.ts";
 import {
   classifyFirstResponse,
   percentile,

@@ -5,7 +5,7 @@ import type {
   PRReview,
   PullRequest,
   ReviewState,
-} from "../shared/types.ts";
+} from "../../shared/types.ts";
 import { analyze } from "./analyzer.ts";
 
 const REPO = "acme/widgets";

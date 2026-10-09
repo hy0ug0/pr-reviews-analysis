@@ -1,4 +1,9 @@
-import type { PullRequest, AnalyzeParams, AnalysisResult, ReviewerStats } from "../shared/types.ts";
+import type {
+  PullRequest,
+  AnalyzeParams,
+  AnalysisResult,
+  ReviewerStats,
+} from "../../shared/types.ts";
 import { summarizeFirstResponse, toTeamFilter } from "./first-response.ts";
 
 export function analyze(prs: PullRequest[], params: AnalyzeParams): AnalysisResult {

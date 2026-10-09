@@ -6,7 +6,7 @@ import {
   fetchRepositorySuggestions,
   fetchUserSuggestions,
 } from "./github.ts";
-import { analyze } from "./analyzer.ts";
+import { analyze } from "./analysis/analyzer.ts";
 import { createLogger } from "./logger.ts";
 import type { AnalyzeParams } from "../shared/types.ts";
 import { analyzeQuerySchema } from "../shared/schemas.ts";
