@@ -46,6 +46,20 @@ describe("GET /api/analyze validation", () => {
     });
   });
 
+  test("rejects a since in the future when until is missing", async () => {
+    expect(await getAnalyze("repo=acme/widgets&since=2999-01-01")).toEqual({
+      status: 400,
+      error: "since: Must be on or before today",
+    });
+  });
+
+  test("rejects an until before GitHub existed", async () => {
+    expect(await getAnalyze("repo=acme/widgets&until=2007-12-31")).toEqual({
+      status: 400,
+      error: "until: Must be on or after 2008-01-01",
+    });
+  });
+
   test("reports every invalid field", async () => {
     expect(await getAnalyze("repo=widgets&until=2026-13-01")).toEqual({
       status: 400,

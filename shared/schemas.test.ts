@@ -1,5 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { analyzeFormSchema, analyzeQuerySchema, parseList } from "./schemas.ts";
+
+// Late on 2026-10-09 in UTC, so a local-time "today" in a timezone ahead of UTC would differ.
+beforeEach(() => setSystemTime(new Date("2026-10-09T23:30:00Z")));
+afterEach(() => setSystemTime());
+
+function issues(result: { error?: { issues: { path: PropertyKey[]; message: string }[] } }) {
+  return result.error?.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`) ?? [];
+}
 
 describe("parseList", () => {
   test("splits on commas, trims and drops blank entries", () => {
@@ -49,13 +57,27 @@ describe("analyzeQuerySchema", () => {
     }
   });
 
-  test("checks the order only when both dates are set", () => {
-    expect(
-      analyzeQuerySchema.safeParse({ repo: "acme/widgets", since: "2999-01-01" }).success,
-    ).toBe(true);
-    expect(
-      analyzeQuerySchema.safeParse({ repo: "acme/widgets", until: "2000-01-01" }).success,
-    ).toBe(true);
+  test("checks since against until, or against today when until is missing", () => {
+    const query = (range: { since?: string; until?: string }) =>
+      issues(analyzeQuerySchema.safeParse({ repo: "acme/widgets", ...range }));
+
+    expect(query({ since: "2026-10-09" })).toEqual([]);
+    expect(query({ since: "2026-10-10" })).toEqual(["since: Must be on or before today"]);
+    expect(query({ since: "2026-10-10", until: "2026-12-31" })).toEqual([]);
+    expect(query({ since: "2026-10-02", until: "2026-10-01" })).toEqual([
+      "since: Must be on or before until",
+    ]);
+  });
+
+  test("rejects an until before GitHub existed", () => {
+    const query = (range: { since?: string; until?: string }) =>
+      issues(analyzeQuerySchema.safeParse({ repo: "acme/widgets", ...range }));
+
+    expect(query({ until: "2008-01-01" })).toEqual([]);
+    expect(query({ until: "2007-12-31" })).toEqual(["until: Must be on or after 2008-01-01"]);
+    expect(query({ since: "2007-01-01", until: "2007-12-31" })).toEqual([
+      "until: Must be on or after 2008-01-01",
+    ]);
   });
 });
 
@@ -70,5 +92,22 @@ describe("analyzeFormSchema", () => {
     expect(
       analyzeFormSchema.safeParse({ ...form, repo: "widgets" }).error?.issues[0]?.message,
     ).toBe("Each repository must match the owner/repo format");
+  });
+
+  test("checks a custom range with the query's rules", () => {
+    const custom = { ...form, timeRange: "custom" } as const;
+    expect(issues(analyzeFormSchema.safeParse({ ...custom, since: "", until: "" }))).toEqual([]);
+    expect(
+      issues(analyzeFormSchema.safeParse({ ...custom, since: "2026-10-02", until: "2026-10-01" })),
+    ).toEqual(["since: Must be on or before until"]);
+    expect(issues(analyzeFormSchema.safeParse({ ...custom, since: "2026-10-10" }))).toEqual([
+      "since: Must be on or before today",
+    ]);
+  });
+
+  test("ignores leftover dates when a preset is selected", () => {
+    expect(
+      analyzeFormSchema.safeParse({ ...form, since: "2026-10-02", until: "2026-10-01" }).success,
+    ).toBe(true);
   });
 });

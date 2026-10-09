@@ -44,6 +44,23 @@ describe("parseConfig", () => {
     });
   });
 
+  test("drops DEFAULT_REPOS entries that are not owner/repo", () => {
+    expect(
+      parseConfig({ DEFAULT_REPOS: "acme/widgets,widgets,acme/gadgets" }, CWD).defaultRepos,
+    ).toEqual(["acme/widgets", "acme/gadgets"]);
+  });
+
+  test("treats blank values as unset", () => {
+    expect(
+      parseConfig({ PORT: " ", CACHE_DIR: " ", DEFAULT_LABEL: " ", DEFAULT_TEAM: " , " }, CWD),
+    ).toMatchObject({
+      port: 3000,
+      cacheDir: "/srv/app/.cache/pr-reviews-analysis",
+      defaultLabel: "",
+      defaultTeam: [],
+    });
+  });
+
   test("keeps an absolute CACHE_DIR", () => {
     expect(parseConfig({ CACHE_DIR: "/var/cache/prs" }, CWD).cacheDir).toBe("/var/cache/prs");
   });
