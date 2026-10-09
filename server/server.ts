@@ -10,6 +10,7 @@ import { analyze } from "./analysis/analyzer.ts";
 import { config } from "./config.ts";
 import { createLogger } from "./logger.ts";
 import type { AnalysisResult, AnalyzeParams } from "../shared/types.ts";
+import { describeCacheUsage } from "../shared/data-source.ts";
 import { analyzeQuerySchema, parseList } from "../shared/schemas.ts";
 import { loadPullRequests } from "./pull-requests.ts";
 
@@ -72,9 +73,7 @@ app.get(
         { skipCache },
       );
       const { prs, matchingPRs, analyzedPRs, isComplete, partialReasons } = fetchResult;
-      log.info(
-        `Analyzing ${analyzedPRs} PRs (total matching: ${matchingPRs}; listing from ${dataSource.listing}, ${dataSource.fetchedPRs} fetched, ${dataSource.reusedPRs} reused)`,
-      );
+      log.info(`Analyzing ${analyzedPRs} PRs (total matching: ${matchingPRs})`);
 
       const result: AnalysisResult = {
         matchingPRs,
@@ -85,6 +84,8 @@ app.get(
         dataSource,
       };
 
+      // Here rather than in loadPullRequests: requests that join one load each get a line.
+      log.info(describeCacheUsage(dataSource, Date.now()));
       return c.json(result);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Internal server error";

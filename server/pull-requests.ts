@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { Equals } from "../shared/type-equals.ts";
-import { describeCacheUsage } from "../shared/data-source.ts";
 import type { DataSource } from "../shared/types.ts";
 import { buildCacheKey, readCache, shortCacheKey, writeCache, type CacheHit } from "./cache.ts";
 import {
@@ -304,7 +303,6 @@ async function loadPullRequestsNow(
     fetchDurationMs: run.requests > 0 ? Math.round(listingMs + detailsMs) : null,
     skippedCache: skipCache,
   };
-  log.info(describeCacheUsage(dataSource, Date.now()));
 
   return {
     fetchResult: {
