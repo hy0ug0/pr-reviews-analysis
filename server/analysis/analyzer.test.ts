@@ -46,7 +46,7 @@ function makePR({
     isDraft: false,
     readyForReviewAt: null,
     author: author === null ? null : { login: author, __typename: authorType },
-    reviews: { nodes: reviews },
+    reviews: { pageInfo: { hasNextPage: false }, nodes: reviews },
     comments: { pageInfo: { hasNextPage: false }, nodes: [] },
     reviewRequests: { pageInfo: { hasNextPage: false }, nodes: [] },
   };

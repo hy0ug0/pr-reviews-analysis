@@ -13,9 +13,9 @@ export type FirstResponseOutcome =
   | { kind: "responded"; startedAt: number; respondedAt: number }
   | { kind: "waiting"; startedAt: number }
   | { kind: "closedWithoutResponse"; startedAt: number }
-  // More comments exist than were fetched, none of the fetched ones is a response,
-  // and no review came before the last fetched comment: an unseen comment may be
-  // the first response.
+  // More comments (or reviews) exist than were fetched, none of the fetched ones is a
+  // response, and no response of the other kind came before the last fetched one: an
+  // unseen comment (or review) may be the first response.
   | { kind: "undetermined"; startedAt: number };
 
 // The later of creation and the first ready-for-review event, so time spent as a
@@ -24,6 +24,33 @@ export function responseStart(pr: Pick<PullRequest, "createdAt" | "readyForRevie
   const createdAt = Date.parse(pr.createdAt);
   if (pr.readyForReviewAt === null) return createdAt;
   return Math.max(createdAt, Date.parse(pr.readyForReviewAt));
+}
+
+function latest(times: number[]): number | null {
+  return times.length > 0 ? Math.max(...times) : null;
+}
+
+// For reviews and comments, the time after which some are missing: the last fetched one's
+// time when GitHub has more, else null. Comments past the fetched page are all at or after
+// the last fetched one. Reviews are missing when their continuation failed; GitHub orders
+// them by creation, so a missing review could have been submitted a little before the last
+// fetched one, a gap this ignores.
+export function unfetchedAfter(pr: Pick<PullRequest, "reviews" | "comments">): {
+  reviews: number | null;
+  comments: number | null;
+} {
+  return {
+    reviews: pr.reviews.pageInfo.hasNextPage
+      ? latest(
+          pr.reviews.nodes.flatMap((review) =>
+            review.submittedAt === null ? [] : [Date.parse(review.submittedAt)],
+          ),
+        )
+      : null,
+    comments: pr.comments.pageInfo.hasNextPage
+      ? latest(pr.comments.nodes.map((comment) => Date.parse(comment.createdAt)))
+      : null,
+  };
 }
 
 function earliest(times: number[]): number | null {
@@ -54,27 +81,30 @@ export function classifyFirstResponse({
       return isInWindow(time) ? [time] : [];
     }),
   );
-  const commentTimes = pr.comments.nodes.map((comment) => Date.parse(comment.createdAt));
   const commentAt = earliest(
-    pr.comments.nodes.flatMap((comment, index) =>
-      isParticipant(comment.author, pr, rules) && isInWindow(commentTimes[index])
-        ? [commentTimes[index]]
-        : [],
-    ),
+    pr.comments.nodes.flatMap((comment) => {
+      const time = Date.parse(comment.createdAt);
+      return isParticipant(comment.author, pr, rules) && isInWindow(time) ? [time] : [];
+    }),
   );
+  const respondedAt = earliest([reviewAt, commentAt].filter((time) => time !== null));
 
-  // Comments past the fetched page are all at or after the last fetched one, so they
-  // can only matter when no fetched comment qualified, no review came first and the
-  // PR was still open at that point (inclusive, like isInWindow).
-  if (commentAt === null && pr.comments.pageInfo.hasNextPage && commentTimes.length > 0) {
-    const lastFetchedCommentAt = Math.max(...commentTimes);
-    const unseenCanCount = closedAt === null || lastFetchedCommentAt <= closedAt;
-    if (unseenCanCount && (reviewAt === null || reviewAt > lastFetchedCommentAt)) {
-      return { kind: "undetermined", startedAt };
-    }
+  // Unfetched reviews or comments come after the last fetched one of their kind, so they
+  // can only matter when no fetched one of that kind qualified, no response came before
+  // that time and the PR was still open then (inclusive, like isInWindow).
+  const unfetched = unfetchedAfter(pr);
+  const unseenMayRespondFirst = (found: number | null, after: number | null) =>
+    found === null &&
+    after !== null &&
+    (closedAt === null || after <= closedAt) &&
+    (respondedAt === null || respondedAt > after);
+  if (
+    unseenMayRespondFirst(reviewAt, unfetched.reviews) ||
+    unseenMayRespondFirst(commentAt, unfetched.comments)
+  ) {
+    return { kind: "undetermined", startedAt };
   }
 
-  const respondedAt = earliest([reviewAt, commentAt].filter((time) => time !== null));
   if (respondedAt !== null) return { kind: "responded", startedAt, respondedAt };
   return pr.state === "OPEN"
     ? { kind: "waiting", startedAt }

@@ -110,6 +110,7 @@ function makePR(number: number, updatedAt = "2026-03-20T09:00:00Z"): PullRequest
     readyForReviewAt: "2026-03-02T09:00:00Z",
     author: { login: "alice", __typename: "User" },
     reviews: {
+      pageInfo: { hasNextPage: false },
       nodes: [
         {
           author: { login: "bob", __typename: "User" },
@@ -468,7 +469,7 @@ describe("loadPullRequests", () => {
 
   test("serves a partial PR but does not cache it", async () => {
     setRemote(makePR(1), makePR(2));
-    const inlineOnly = { ...makePR(2), reviews: { nodes: [] } };
+    const inlineOnly = { ...makePR(2), reviews: { pageInfo: { hasNextPage: true }, nodes: [] } };
     fetchOverrides.set(`${REPO}#2`, {
       kind: "partial",
       pullRequest: inlineOnly,

@@ -50,7 +50,8 @@ A line under the summary cards shows how many bot PRs and bot reviews were left 
 
 The **Response p50** and **p90** columns of the reviewer table measure how long a reviewer takes to respond once asked. Each sample runs from a review request to that reviewer's next review or conversation comment on the PR:
 
-- A request to a team is credited to the first team member who responds, timed from the team request. A reviewer's own pending request comes before a team's.
+- A request to a team is credited to the first person who responds after it, timed from the team request. Team membership isn't checked, since that needs the `read:org` scope and private teams stay hidden. A reviewer's own pending request comes before a team's.
+- With **Include bots** ticked, a bot asked for review gets samples like anyone else.
 - Time as a draft doesn't count: a request made during the draft starts when the PR is ready for review.
 - A request made again after the reviewer responded starts a new sample. A request made again while one is pending keeps the first one's start.
 - A removed request, a request still pending, and a response after the PR closed give no sample.

@@ -188,7 +188,12 @@ export const pullRequestSchema = z.object({
   ...pullRequestFields,
   // When the PR first left draft; null if it never was a draft.
   readyForReviewAt: z.string().nullable(),
-  reviews: z.object({ nodes: z.array(reviewSchema) }),
+  // Every review, unless fetching the pages after the inline one failed: then hasNextPage is
+  // true and only the inline reviews are here. Such a PR is never cached.
+  reviews: z.object({
+    pageInfo: z.object({ hasNextPage: z.boolean() }),
+    nodes: z.array(reviewSchema),
+  }),
   // The oldest COMMENTS_PAGE_SIZE comments at most; hasNextPage says whether more exist.
   comments: z.object({
     pageInfo: z.object({ hasNextPage: z.boolean() }),
@@ -248,24 +253,27 @@ function toReviewRequestEvent(node: ReviewRequestEventNode): ReviewRequestEvent 
   };
 }
 
-// Drops the nested pageInfo, flattens the ready-for-review event and normalizes the review
+// Drops the review cursor, flattens the ready-for-review event and normalizes the review
 // request events so the result matches PullRequest. `repo` comes from the listing, since the
 // fragment does not select it.
 export function toPullRequest({
   repo,
   node,
   reviews,
+  hasMoreReviews,
 }: {
   repo: string;
   node: PullRequestNode;
   reviews: PRReview[];
+  // Whether GitHub has reviews that `reviews` lacks.
+  hasMoreReviews: boolean;
 }): PullRequest {
   const { reviews: _connection, timelineItems, comments, reviewRequestEvents, ...fields } = node;
   return {
     repo,
     ...fields,
     readyForReviewAt: timelineItems.nodes.find((item) => item.createdAt)?.createdAt ?? null,
-    reviews: { nodes: reviews },
+    reviews: { pageInfo: { hasNextPage: hasMoreReviews }, nodes: reviews },
     comments,
     reviewRequests: {
       pageInfo: reviewRequestEvents.pageInfo,

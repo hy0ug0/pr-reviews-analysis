@@ -62,6 +62,7 @@ function makePR({
   isDraft = false,
   readyForReviewAt = null,
   reviews = [],
+  moreReviews = false,
   comments = [],
   moreComments = false,
 }: {
@@ -73,6 +74,8 @@ function makePR({
   isDraft?: boolean;
   readyForReviewAt?: string | null;
   reviews?: PRReview[];
+  // Whether GitHub has reviews that weren't fetched (the continuation failed).
+  moreReviews?: boolean;
   comments?: PRComment[];
   // Whether GitHub has comments past the fetched page.
   moreComments?: boolean;
@@ -90,7 +93,7 @@ function makePR({
     isDraft,
     readyForReviewAt,
     author: { login: author, __typename: "User" },
-    reviews: { nodes: reviews },
+    reviews: { pageInfo: { hasNextPage: moreReviews }, nodes: reviews },
     comments: { pageInfo: { hasNextPage: moreComments }, nodes: comments },
     reviewRequests: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
@@ -424,6 +427,47 @@ describe("classifyFirstResponse", () => {
 
       expect(respondedAfter(outcome)).toBe((COMMENTS_PAGE_SIZE + 1) * HOUR);
       expect(classify(makePR({ comments: botComments, moreComments: false })).kind).toBe("waiting");
+    });
+  });
+
+  // The review continuation failed, so only the inline reviews were fetched; the last one,
+  // by a bot, is at 10:30.
+  describe("when GitHub has more reviews than were fetched", () => {
+    const inlineReviews = [review({ by: "ci", type: "Bot", submittedAt: "2026-03-02T10:30:00Z" })];
+
+    test("is undetermined when the only response comes after the last fetched review", () => {
+      const outcome = classify(
+        makePR({
+          reviews: inlineReviews,
+          moreReviews: true,
+          comments: [comment({ by: "bob", createdAt: "2026-03-02T13:00:00Z" })],
+        }),
+      );
+
+      expect(outcome.kind).toBe("undetermined");
+    });
+
+    test("uses a response that comes before the last fetched review", () => {
+      const outcome = classify(
+        makePR({
+          reviews: inlineReviews,
+          moreReviews: true,
+          comments: [comment({ by: "bob", createdAt: "2026-03-02T10:00:00Z" })],
+        }),
+      );
+
+      expect(respondedAfter(outcome)).toBe(HOUR);
+    });
+
+    test("uses a fetched review that qualifies, since missing ones come after it", () => {
+      const outcome = classify(
+        makePR({
+          reviews: [...inlineReviews, review({ by: "bob", submittedAt: "2026-03-02T11:00:00Z" })],
+          moreReviews: true,
+        }),
+      );
+
+      expect(respondedAfter(outcome)).toBe(2 * HOUR);
     });
   });
 });

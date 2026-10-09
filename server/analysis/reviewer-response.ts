@@ -1,5 +1,5 @@
 import type { Actor, PullRequest, RequestedReviewer, ReviewerStats } from "../../shared/types.ts";
-import { responseStart } from "./first-response.ts";
+import { responseStart, unfetchedAfter } from "./first-response.ts";
 import {
   isParticipant,
   toParticipantRules,
@@ -37,8 +37,9 @@ type TimelineItem =
   | { kind: "requested" | "removed"; time: number; target: RequestTarget }
   | { kind: "response"; time: number; responder: Actor };
 
-// Requests to the PR author, to bots (unless included) and, with a team filter, to people
-// outside it never get a response that counts, so they are skipped. A hidden reviewer
+// Requests to the PR author, to bots and, with a team filter, to people outside it never get
+// a response that counts, so they are skipped. With bots included, a requested bot is a
+// reviewer like any other and its responses give samples, as everywhere else. A hidden reviewer
 // (null) can't be credited to anyone.
 function toRequestTarget(
   reviewer: RequestedReviewer | null,
@@ -62,20 +63,16 @@ function toRequestTarget(
   }
 }
 
-// Comments or events past the fetched page are at or after the last fetched one. Past that
-// time an unseen comment could be an earlier response, or an unseen event a removal, so
-// later responses can't be timed.
+// Unfetched reviews, comments or events come after the last fetched one of their kind. Past
+// the earliest of those times an unseen review or comment could be an earlier response, or
+// an unseen event a removal, so later responses can't be timed.
 function horizon(pr: PullRequest): number {
-  let limit = Infinity;
-  const pages = [
-    { hasNextPage: pr.comments.pageInfo.hasNextPage, times: pr.comments.nodes },
-    { hasNextPage: pr.reviewRequests.pageInfo.hasNextPage, times: pr.reviewRequests.nodes },
-  ];
-  for (const { hasNextPage, times } of pages) {
-    if (!hasNextPage || times.length === 0) continue;
-    limit = Math.min(limit, Math.max(...times.map((item) => Date.parse(item.createdAt))));
-  }
-  return limit;
+  const { reviews, comments } = unfetchedAfter(pr);
+  const events = pr.reviewRequests.pageInfo.hasNextPage
+    ? pr.reviewRequests.nodes.map((event) => Date.parse(event.createdAt))
+    : [];
+  const limits = [reviews, comments, events.length > 0 ? Math.max(...events) : null];
+  return Math.min(...limits.filter((limit) => limit !== null));
 }
 
 // One sample per answered request. The rules, in short:
@@ -87,7 +84,9 @@ function horizon(pr: PullRequest): number {
 // - A pending individual request keeps its earliest start when requested again. A request
 //   after the reviewer responded opens a new clock: each re-review round is a sample.
 // - A removed request, or one still open at the end, gives no sample.
-// - A team request is answered by the first member to respond, timed from the team request.
+// - A team request is answered by the first participant to respond, timed from the team
+//   request. Team membership isn't checked: it would take Team.members, the read:org scope
+//   and more query cost, and the token can't see private teams.
 //   A responder's own pending request takes precedence over a team's. Only someone's first
 //   response after a team request can answer it: a later review by someone who passed on
 //   the team request (responding on their own request) doesn't.
@@ -181,8 +180,8 @@ export function collectReviewerResponses({
   return samples.filter((sample) => sample.respondedAt <= limit);
 }
 
-// Keyed by lowercased login. Samples come from every listed PR, like first response, whatever the date of the request
-// or the response.
+// Keyed by lowercased login. Samples come from every listed PR, like first response, whatever
+// the date of the request or the response.
 export function summarizeReviewerResponses({
   prs,
   ...participantOptions

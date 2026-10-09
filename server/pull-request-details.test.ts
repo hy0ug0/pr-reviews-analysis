@@ -136,7 +136,7 @@ describe("fetchPullRequestsInBatches", () => {
         repo: REPO,
         ...node,
         readyForReviewAt: null,
-        reviews: { nodes: [makeReview("alice")] },
+        reviews: { pageInfo: { hasNextPage: false }, nodes: [makeReview("alice")] },
         reviewRequests: { pageInfo: { hasNextPage: false }, nodes: [] },
       },
     });
@@ -283,7 +283,7 @@ describe("fetchPullRequestsInBatches", () => {
       kind: "partial",
       pullRequest: expect.objectContaining({
         number: 3,
-        reviews: { nodes: [makeReview("alice")] },
+        reviews: { pageInfo: { hasNextPage: true }, nodes: [makeReview("alice")] },
       }),
       reason: `Failed to fetch complete reviews for ${REPO}#3: boom`,
     });

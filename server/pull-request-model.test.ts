@@ -117,7 +117,12 @@ describe("pullRequestNodeSchema", () => {
 
 describe("toPullRequest", () => {
   test("sets repo, flattens the connections and matches pullRequestSchema", () => {
-    const pullRequest = toPullRequest({ repo: REPO, node: parseNode(), reviews: [review] });
+    const pullRequest = toPullRequest({
+      repo: REPO,
+      node: parseNode(),
+      reviews: [review],
+      hasMoreReviews: false,
+    });
 
     expect(Object.keys(pullRequest)).toEqual([
       "repo",
@@ -137,7 +142,7 @@ describe("toPullRequest", () => {
       "reviewRequests",
     ]);
     expect(pullRequest.repo).toBe(REPO);
-    expect(pullRequest.reviews).toEqual({ nodes: [review] });
+    expect(pullRequest.reviews).toEqual({ pageInfo: { hasNextPage: false }, nodes: [review] });
     expect(pullRequest.comments).toEqual(comments);
     expect(pullRequestSchema.parse(pullRequest)).toEqual(pullRequest);
   });
@@ -150,7 +155,12 @@ describe("toPullRequest", () => {
       },
     });
 
-    const pullRequest = toPullRequest({ repo: REPO, node, reviews: node.reviews.nodes });
+    const pullRequest = toPullRequest({
+      repo: REPO,
+      node,
+      reviews: node.reviews.nodes,
+      hasMoreReviews: false,
+    });
 
     expect(pullRequest.reviews.nodes).toEqual([review]);
   });
@@ -158,9 +168,9 @@ describe("toPullRequest", () => {
   test("takes readyForReviewAt from the first ready-for-review event", () => {
     const node = parseNode({ timelineItems: { nodes: [{ createdAt: "2026-03-02T08:00:00Z" }] } });
 
-    expect(toPullRequest({ repo: REPO, node, reviews: [] }).readyForReviewAt).toBe(
-      "2026-03-02T08:00:00Z",
-    );
+    expect(
+      toPullRequest({ repo: REPO, node, reviews: [], hasMoreReviews: false }).readyForReviewAt,
+    ).toBe("2026-03-02T08:00:00Z");
   });
 
   test("normalizes review request events, keeping hidden reviewers as null", () => {
@@ -203,7 +213,9 @@ describe("toPullRequest", () => {
       },
     });
 
-    expect(toPullRequest({ repo: REPO, node, reviews: [] }).reviewRequests).toEqual({
+    expect(
+      toPullRequest({ repo: REPO, node, reviews: [], hasMoreReviews: false }).reviewRequests,
+    ).toEqual({
       pageInfo: { hasNextPage: true },
       nodes: [
         {
@@ -238,7 +250,8 @@ describe("toPullRequest", () => {
 
   test("sets readyForReviewAt to null when the PR was never a draft", () => {
     expect(
-      toPullRequest({ repo: REPO, node: parseNode(), reviews: [] }).readyForReviewAt,
+      toPullRequest({ repo: REPO, node: parseNode(), reviews: [], hasMoreReviews: false })
+        .readyForReviewAt,
     ).toBeNull();
   });
 });

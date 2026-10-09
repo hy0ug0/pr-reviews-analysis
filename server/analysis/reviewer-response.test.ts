@@ -58,6 +58,7 @@ function makePR({
   events = [],
   moreEvents = false,
   reviews = [],
+  moreReviews = false,
   comments = [],
   moreComments = false,
 }: {
@@ -71,6 +72,8 @@ function makePR({
   // Whether GitHub has review request events past the fetched page.
   moreEvents?: boolean;
   reviews?: PRReview[];
+  // Whether GitHub has reviews that weren't fetched (the continuation failed).
+  moreReviews?: boolean;
   comments?: PRComment[];
   moreComments?: boolean;
 }): PullRequest {
@@ -87,7 +90,7 @@ function makePR({
     isDraft,
     readyForReviewAt,
     author: { login: author, __typename: "User" },
-    reviews: { nodes: reviews },
+    reviews: { pageInfo: { hasNextPage: moreReviews }, nodes: reviews },
     comments: { pageInfo: { hasNextPage: moreComments }, nodes: comments },
     reviewRequests: { pageInfo: { hasNextPage: moreEvents }, nodes: events },
   };
@@ -211,6 +214,7 @@ describe("collectReviewerResponses on real timelines", () => {
       state: "OPEN" as const,
       closedAt: null,
       reviews: {
+        ...memberAskedAfterTeam.reviews,
         nodes: [
           ...memberAskedAfterTeam.reviews.nodes,
           review("2026-01-21T03:08:16Z", "alice", "COMMENTED"),
@@ -249,7 +253,10 @@ describe("collectReviewerResponses on real timelines", () => {
 
     const withMemberReview = {
       ...teamRemoved,
-      reviews: { nodes: [review("2026-02-01T19:29:42Z", "bob", "APPROVED")] },
+      reviews: {
+        ...teamRemoved.reviews,
+        nodes: [review("2026-02-01T19:29:42Z", "bob", "APPROVED")],
+      },
     };
     expect(durations(withMemberReview)).toEqual([]);
   });
@@ -484,6 +491,27 @@ describe("collectReviewerResponses rules", () => {
     });
 
     expect(durations(pr, { teamMembers: ["Carol"] })).toEqual([["carol", 2 * HOUR]]);
+  });
+
+  test("drops responses after the last fetched review when the review continuation failed", () => {
+    // Fetched: a review by carol at 10:30. Missing: bob's review at 11:00. Bob's comment at
+    // 13:00 would otherwise give 3 h instead of 1 h.
+    const pr = (moreReviews: boolean) =>
+      makePR({
+        events: [
+          requested("2026-03-02T10:00:00Z", "bob"),
+          requested("2026-03-02T10:00:00Z", "carol"),
+        ],
+        reviews: [review("2026-03-02T10:30:00Z", "carol")],
+        moreReviews,
+        comments: [comment("2026-03-02T13:00:00Z", "bob")],
+      });
+
+    expect(durations(pr(true))).toEqual([["carol", 30 * MINUTE]]);
+    expect(durations(pr(false))).toEqual([
+      ["carol", 30 * MINUTE],
+      ["bob", 3 * HOUR],
+    ]);
   });
 
   test("drops responses after the last fetched event when more events exist", () => {
