@@ -167,13 +167,11 @@ export async function fetchPullRequestsInBatches({
         log.warn(
           `Batch fetch failed for ${repo} (${completedBatches}/${batches.length}): ${message}`,
         );
-        return batch.map(
-          (number): BatchItem => ({
-            kind: "failed",
-            number,
-            reason: `Failed to fetch ${repo}#${number}: ${message}`,
-          }),
-        );
+        return batch.map((number) => ({
+          kind: "failed",
+          number,
+          reason: `Failed to fetch ${repo}#${number}: ${message}`,
+        }));
       }
     },
   );
