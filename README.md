@@ -55,7 +55,7 @@ The server caches GitHub data on disk in two tiers:
 
 When the list expires, or the date range changes (the time range presets end today, so they change every day), the server lists the PRs again. This is a light search without reviews. Only new and updated PRs are fetched again. Merged and closed PRs rarely change, so most PRs come from the cache.
 
-Tick **Refresh from GitHub** in the form to list the PRs again right away. Only the PRs updated since they were cached are refetched. A line under the summary cards shows when the list was fetched and how many PRs came from GitHub or from the cache.
+Tick **Refresh from GitHub** in the form to list the PRs again right away. Only the PRs updated since they were cached are refetched. A line above the summary cards shows how many PRs came from the cache, how many GitHub requests the run made and how long they took, and how old the cached data is. When the PR list came from the cache, its **Refresh** button reruns the same analysis this way without changing the form. The server logs the same figures once per run, as a `Cache usage:` line.
 
 A PR whose reviews could not be fetched completely is shown but not cached, so the next request fetches it again.
 

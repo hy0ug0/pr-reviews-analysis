@@ -34,6 +34,8 @@ export default function App() {
   // The team list the shown result was computed with, not the form's current value.
   const [resultTeam, setResultTeam] = useState<string[]>([]);
   const [defaults, setDefaults] = useState<AppDefaults | undefined>(undefined);
+  // The form values behind the shown result, so Refresh can rerun them.
+  const [lastValues, setLastValues] = useState<AnalyzeFormValues | null>(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
@@ -47,7 +49,7 @@ export default function App() {
       });
   }, []);
 
-  const handleAnalyze = async (values: AnalyzeFormValues) => {
+  const runAnalysis = async (values: AnalyzeFormValues) => {
     setLoading(true);
     setError(null);
     try {
@@ -59,6 +61,17 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleAnalyze = (values: AnalyzeFormValues) => {
+    setLastValues(values);
+    return runAnalysis(values);
+  };
+
+  // Reruns the shown analysis without the cache. The form, and its "Refresh from GitHub"
+  // checkbox, stay as they are.
+  const handleRefresh = () => {
+    if (lastValues) void runAnalysis({ ...lastValues, skipCache: true });
   };
 
   const showTruncatedWarning = result && !result.isComplete;
@@ -142,10 +155,17 @@ export default function App() {
               </div>
             )}
 
-            <div className="space-y-2">
+            <div className="space-y-3">
+              {result.dataSource && (
+                <DataSourceNote
+                  dataSource={result.dataSource}
+                  matchingPRs={result.matchingPRs}
+                  loading={loading}
+                  onRefresh={handleRefresh}
+                />
+              )}
               <SummaryCards data={result} />
               {result.excludedBots && <ExcludedBotsNote excludedBots={result.excludedBots} />}
-              {result.dataSource && <DataSourceNote dataSource={result.dataSource} />}
             </div>
 
             <FirstResponseSection
