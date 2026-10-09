@@ -10,7 +10,7 @@
     "resolveJsonModule": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    "types": ["node"]
+    "types": ["node", "bun"]
   },
   "include": ["**/*", "../shared/**/*"],
   "exclude": ["node_modules"]
