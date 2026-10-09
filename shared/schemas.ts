@@ -4,61 +4,104 @@ import type { AnalysisResult } from "./types";
 
 const REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 
+// GitHub launched in 2008, so no PR is older. A search with no since starts here.
+export const GITHUB_EPOCH_DATE = "2008-01-01";
+
+// A search with no until ends today, in UTC like GitHub's created: qualifier.
+export function todayUtc(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export function isRepoName(value: string): boolean {
+  return REPO_PATTERN.test(value);
+}
+
 export const timeRangePresets = ["week", "month", "quarter", "year", "all", "custom"] as const;
 
-export const analyzeFormSchema = z.object({
-  repo: z
-    .string()
-    .trim()
-    .min(1, "At least one repository is required")
-    .refine(
-      (val) =>
-        val
-          .split(",")
-          .map((r) => r.trim())
-          .filter(Boolean)
-          .every((r) => REPO_PATTERN.test(r)),
-      "Each repository must match the owner/repo format",
-    ),
-  label: z.string().trim().optional().default(""),
-  timeRange: z.enum(timeRangePresets).default("month"),
-  since: z.string().optional().default(""),
-  until: z.string().optional().default(""),
-  team: z.string().trim().optional().default(""),
-  skipCache: z.boolean().optional().default(false),
-});
+// Repositories and team members travel as comma-separated lists; blank entries are dropped.
+export function parseList(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+const repoListSchema = z
+  .string({ error: "At least one repository is required" })
+  .transform(parseList)
+  .refine((repos) => repos.length > 0, "At least one repository is required")
+  .refine((repos) => repos.every(isRepoName), "Each repository must match the owner/repo format");
+
+// A query string can't leave a value unset, so an empty value means the same as a missing one.
+function emptyAsUndefined(value: string | undefined): string | undefined {
+  return value?.trim() || undefined;
+}
+
+const optionalDateSchema = z
+  .string()
+  .optional()
+  .transform(emptyAsUndefined)
+  .pipe(
+    z.iso
+      .date({ error: (issue) => `Invalid date ${String(issue.input)}, expected YYYY-MM-DD` })
+      .optional(),
+  );
+
+// Checks a range against the bounds a search actually uses: GitHub's epoch when since is
+// missing and today when until is missing. YYYY-MM-DD strings sort like the dates they spell.
+function checkDateRange(
+  { since, until }: { since?: string; until?: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (until && until < GITHUB_EPOCH_DATE) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["until"],
+      message: `Must be on or after ${GITHUB_EPOCH_DATE}`,
+    });
+  }
+  if (since && until) {
+    if (since > until) {
+      ctx.addIssue({ code: "custom", path: ["since"], message: "Must be on or before until" });
+    }
+  } else if (since && since > todayUtc()) {
+    ctx.addIssue({ code: "custom", path: ["since"], message: "Must be on or before today" });
+  }
+}
+
+export const analyzeFormSchema = z
+  .object({
+    repo: repoListSchema,
+    label: z.string().trim().optional().default(""),
+    timeRange: z.enum(timeRangePresets).default("month"),
+    since: z.string().optional().default(""),
+    until: z.string().optional().default(""),
+    team: z.string().trim().optional().default(""),
+    skipCache: z.boolean().optional().default(false),
+  })
+  // Presets compute their own range; only a custom one comes from the user.
+  .superRefine((form, ctx) => {
+    if (form.timeRange !== "custom") return;
+    checkDateRange({ since: form.since || undefined, until: form.until || undefined }, ctx);
+  });
 
 export type AnalyzeFormInput = z.input<typeof analyzeFormSchema>;
 
-export const analyzeQuerySchema = z.object({
-  repo: z
-    .string()
-    .trim()
-    .min(1, "At least one repository is required")
-    .refine(
-      (val) =>
-        val
-          .split(",")
-          .map((r) => r.trim())
-          .filter(Boolean)
-          .every((r) => REPO_PATTERN.test(r)),
-      "Each repository must match the owner/repo format",
-    ),
-  label: z.string().trim().optional(),
-  since: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD")
-    .optional(),
-  until: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD")
-    .optional(),
-  team: z.string().trim().optional(),
-  skipCache: z
-    .string()
-    .optional()
-    .transform((v) => v === "1"),
-});
+// The parameter keeps the form's field name, `repo`; the output calls the list `repos`.
+export const analyzeQuerySchema = z
+  .object({
+    repo: repoListSchema,
+    label: z.string().optional().transform(emptyAsUndefined),
+    since: optionalDateSchema,
+    until: optionalDateSchema,
+    team: z.string().optional().transform(parseList),
+    skipCache: z
+      .string()
+      .optional()
+      .transform((v) => v === "1"),
+  })
+  .superRefine(checkDateRange)
+  .transform(({ repo, ...rest }) => ({ ...rest, repos: repo }));
 
 export const reviewerStatsSchema = z.object({
   login: z.string(),

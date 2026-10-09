@@ -1,6 +1,7 @@
 import { useState, useEffect, useSyncExternalStore } from "react";
 import type { AnalysisResult, AnalyzeFormValues, AppDefaults } from "./types";
 import { fetchAnalysis, fetchDefaults } from "./api";
+import { parseList } from "../../shared/schemas";
 import { Header } from "./components/Header";
 import { AnalyzeForm } from "./components/AnalyzeForm";
 import { SummaryCards } from "./components/SummaryCards";
@@ -51,12 +52,7 @@ export default function App() {
     try {
       const data = await fetchAnalysis(values);
       setResult(data);
-      setResultTeam(
-        values.team
-          .split(",")
-          .map((member) => member.trim())
-          .filter(Boolean),
-      );
+      setResultTeam(parseList(values.team));
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
     } finally {

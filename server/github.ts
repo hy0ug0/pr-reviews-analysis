@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { GITHUB_EPOCH_DATE, todayUtc } from "../shared/schemas.ts";
 import type { AppSuggestion } from "../shared/types.ts";
 import { uniqueReasons } from "./lib/partial-reasons.ts";
 import { createLogger } from "./logger.ts";
@@ -35,7 +36,6 @@ const MAX_SEARCH_PAGES = SEARCH_HARD_LIMIT / SEARCH_PAGE_SIZE;
 const PR_BATCH_SIZE = 50;
 const FETCH_CONCURRENCY = 5;
 const GRAPHQL_MAX_ATTEMPTS = 3;
-const GITHUB_EPOCH_DATE = "2008-01-01";
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 // Lists PRs without their data: updatedAt tells which cached PRs are still current.
@@ -370,13 +370,6 @@ function buildSearchQuery(repo: string, label?: string, since?: string, until?: 
   return query;
 }
 
-function splitList(value: string | undefined): string[] {
-  return (value ?? "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 function matchesSuggestionSeed(value: string, query: string): boolean {
   return query === "" || value.toLowerCase().includes(query.toLowerCase());
 }
@@ -438,7 +431,7 @@ function addDays(value: string, days: number): string {
 
 function normalizeDateRange(since?: string, until?: string): DateWindow {
   const normalizedSince = since ?? GITHUB_EPOCH_DATE;
-  const normalizedUntil = until ?? formatDateOnly(new Date());
+  const normalizedUntil = until ?? todayUtc();
   const sinceDate = parseDateOnly(normalizedSince);
   const untilDate = parseDateOnly(normalizedUntil);
 
@@ -506,7 +499,7 @@ export async function fetchRepositorySuggestions(
 }
 
 export async function fetchLabelSuggestions(
-  repoInput: string,
+  repoList: readonly string[],
   query: string,
   defaultLabel?: string,
 ): Promise<AppSuggestion[]> {
@@ -516,7 +509,7 @@ export async function fetchLabelSuggestions(
       ? [{ value: defaultLabel, detail: "Default label" }]
       : [];
   const suggestions: AppSuggestion[] = [...seedSuggestions];
-  const repos = splitList(repoInput).slice(0, 5);
+  const repos = repoList.slice(0, 5);
 
   for (const repo of repos) {
     let parsed: { owner: string; name: string };

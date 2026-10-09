@@ -1,14 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import type { z } from "zod";
+import { config } from "./config.ts";
 import { createLogger } from "./logger.ts";
 
 const log = createLogger("cache");
-
-const DEFAULT_CACHE_TTL_HOURS = 6;
-const DEFAULT_PR_CACHE_TTL_DAYS = 30;
-const DEFAULT_CACHE_DIR = resolve(process.cwd(), ".cache", "pr-reviews-analysis");
 
 interface CacheRecord<T> {
   cachedAt: string;
@@ -29,21 +26,9 @@ function isCacheRecord(value: unknown): value is CacheRecord<unknown> {
   );
 }
 
-function parsePositiveInteger(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-
-  return parsed;
-}
-
-const CACHE_TTL_HOURS = parsePositiveInteger(process.env.CACHE_TTL_HOURS, DEFAULT_CACHE_TTL_HOURS);
+const CACHE_TTL_HOURS = config.cacheTtlHours;
 const CACHE_TTL_MS = CACHE_TTL_HOURS * 60 * 60 * 1000;
-const PR_CACHE_TTL_DAYS = parsePositiveInteger(
-  process.env.PR_CACHE_TTL_DAYS,
-  DEFAULT_PR_CACHE_TTL_DAYS,
-);
+const PR_CACHE_TTL_DAYS = config.prCacheTtlDays;
 const PR_CACHE_TTL_MS = PR_CACHE_TTL_DAYS * 24 * 60 * 60 * 1000;
 
 // "listing" entries follow CACHE_TTL_HOURS. "pullRequest" entries stay valid while their
@@ -63,9 +48,7 @@ function ttlMs(ttl: CacheTtl): number {
   }
 }
 
-const CACHE_DIR = process.env.CACHE_DIR
-  ? resolve(process.cwd(), process.env.CACHE_DIR)
-  : DEFAULT_CACHE_DIR;
+const CACHE_DIR = config.cacheDir;
 
 function getCacheFilePath(key: string): string {
   return join(CACHE_DIR, `${key}.json`);

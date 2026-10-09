@@ -34,6 +34,8 @@ cp .env.example .env
 - `CACHE_DIR`: cache directory path (default `.cache/pr-reviews-analysis`)
 - `ANALYZE_IDLE_TIMEOUT_SECONDS`: Bun idle timeout for `/api/analyze`, in seconds. Defaults to `0`, which disables the timeout for this long-running local route. Finite values must be `1..255`.
 
+The server reads these once at startup (`server/config.ts`). A numeric variable that isn't a whole number in its range, such as `CACHE_TTL_HOURS=6h`, logs a warning and uses the default.
+
 ## Cache
 
 The server caches GitHub data on disk in two tiers:

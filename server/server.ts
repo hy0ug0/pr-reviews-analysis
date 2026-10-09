@@ -7,84 +7,46 @@ import {
   fetchUserSuggestions,
 } from "./github.ts";
 import { analyze } from "./analysis/analyzer.ts";
+import { config } from "./config.ts";
 import { createLogger } from "./logger.ts";
 import type { AnalysisResult, AnalyzeParams } from "../shared/types.ts";
-import { analyzeQuerySchema } from "../shared/schemas.ts";
-import { getCacheConfig } from "./cache.ts";
+import { analyzeQuerySchema, parseList } from "../shared/schemas.ts";
 import { loadPullRequests } from "./pull-requests.ts";
 
 const log = createLogger("server");
 
-try {
-  execFileSync("gh", ["auth", "status"], { stdio: "pipe" });
-} catch {
-  log.error("GitHub CLI not authenticated. Run: gh auth login");
-  process.exit(1);
-}
-
-const app = new Hono();
-
-const DEFAULT_REPOS = process.env.DEFAULT_REPOS ?? "";
-const DEFAULT_LABEL = process.env.DEFAULT_LABEL ?? "";
-const DEFAULT_TEAM = process.env.DEFAULT_TEAM ?? "";
-const DEFAULT_ANALYZE_IDLE_TIMEOUT_SECONDS = 0;
+export const app = new Hono();
 
 interface BunServerWithTimeout {
   timeout(req: Request, seconds: number): void;
 }
 
-function parseAnalyzeIdleTimeoutSeconds(value: string | undefined): number {
-  if (value === undefined || value.trim() === "") return DEFAULT_ANALYZE_IDLE_TIMEOUT_SECONDS;
-
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 255) {
-    log.warn(
-      `Invalid ANALYZE_IDLE_TIMEOUT_SECONDS="${value}". Expected an integer from 0 to 255; using ${DEFAULT_ANALYZE_IDLE_TIMEOUT_SECONDS}.`,
-    );
-    return DEFAULT_ANALYZE_IDLE_TIMEOUT_SECONDS;
-  }
-
-  return parsed;
-}
-
-const { cacheDir, ttlHours, prTtlDays } = getCacheConfig();
-const analyzeIdleTimeoutSeconds = parseAnalyzeIdleTimeoutSeconds(
-  process.env.ANALYZE_IDLE_TIMEOUT_SECONDS,
-);
-
-log.info(`Local cache enabled at ${cacheDir} (listing TTL: ${ttlHours}h, PR TTL: ${prTtlDays}d)`);
-log.info(
-  analyzeIdleTimeoutSeconds === 0
-    ? "Analyze request idle timeout disabled"
-    : `Analyze request idle timeout set to ${analyzeIdleTimeoutSeconds}s`,
-);
-
 app.get("/api/defaults", (c) => {
-  return c.json({ repos: DEFAULT_REPOS, label: DEFAULT_LABEL, team: DEFAULT_TEAM });
+  // The form fields are comma-separated strings, so the lists go back to that format.
+  return c.json({
+    repos: config.defaultRepos.join(","),
+    label: config.defaultLabel,
+    team: config.defaultTeam.join(","),
+  });
 });
 
 app.get("/api/suggestions/repos", async (c) => {
   const query = c.req.query("q") ?? "";
-  const defaultRepos = DEFAULT_REPOS.split(",")
-    .map((repo) => repo.trim())
-    .filter(Boolean);
-  const suggestions = await fetchRepositorySuggestions(query, defaultRepos);
+  const suggestions = await fetchRepositorySuggestions(query, config.defaultRepos);
   return c.json({ suggestions });
 });
 
 app.get("/api/suggestions/labels", async (c) => {
   const query = c.req.query("q") ?? "";
-  const repo = c.req.query("repo") ?? DEFAULT_REPOS;
-  const suggestions = await fetchLabelSuggestions(repo, query, DEFAULT_LABEL);
+  const repoParam = c.req.query("repo");
+  const repos = repoParam === undefined ? config.defaultRepos : parseList(repoParam);
+  const suggestions = await fetchLabelSuggestions(repos, query, config.defaultLabel);
   return c.json({ suggestions });
 });
 
 app.get("/api/suggestions/users", async (c) => {
   const query = c.req.query("q") ?? "";
-  const defaultUsers = DEFAULT_TEAM.split(",")
-    .map((user) => user.trim())
-    .filter(Boolean);
-  const suggestions = await fetchUserSuggestions(query, defaultUsers);
+  const suggestions = await fetchUserSuggestions(query, config.defaultTeam);
   return c.json({ suggestions });
 });
 
@@ -97,26 +59,8 @@ app.get(
     }
   }),
   async (c) => {
-    const query = c.req.valid("query");
-    const repoParam = query.repo || DEFAULT_REPOS;
-    const skipCache = query.skipCache;
-
-    const repos = repoParam
-      .split(",")
-      .map((r) => r.trim())
-      .filter(Boolean);
-    const label = query.label || undefined;
-    const since = query.since || undefined;
-    const until = query.until || undefined;
-    const team = query.team || undefined;
-    const teamMembers = team
-      ? team
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean)
-      : undefined;
-
-    const params: AnalyzeParams = { repos, label, since, until, teamMembers };
+    const { repos, label, since, until, team, skipCache } = c.req.valid("query");
+    const params: AnalyzeParams = { repos, label, since, until, teamMembers: team };
 
     log.info(
       `Analyzing: ${repos.join(", ")}${label ? ` [label: ${label}]` : ""}${since ? ` from ${since}` : ""}${until ? ` to ${until}` : ""}${skipCache ? " [skip cache]" : ""}`,
@@ -150,15 +94,34 @@ app.get(
   },
 );
 
-const PORT = parseInt(process.env.PORT || "3000", 10);
+function checkGhAuth(): void {
+  try {
+    execFileSync("gh", ["auth", "status"], { stdio: "pipe" });
+  } catch {
+    log.error("GitHub CLI not authenticated. Run: gh auth login");
+    process.exit(1);
+  }
+}
 
-log.info(`PR Reviews Analysis running at http://localhost:${PORT}`);
+// Tests import this module for `app`; only a real start checks gh and logs the settings.
+if (import.meta.main) {
+  checkGhAuth();
+  log.info(
+    `Local cache enabled at ${config.cacheDir} (listing TTL: ${config.cacheTtlHours}h, PR TTL: ${config.prCacheTtlDays}d)`,
+  );
+  log.info(
+    config.analyzeIdleTimeoutSeconds === 0
+      ? "Analyze request idle timeout disabled"
+      : `Analyze request idle timeout set to ${config.analyzeIdleTimeoutSeconds}s`,
+  );
+  log.info(`PR Reviews Analysis running at http://localhost:${config.port}`);
+}
 
 export default {
-  port: PORT,
+  port: config.port,
   fetch(req: Request, server?: BunServerWithTimeout) {
     if (server && new URL(req.url).pathname === "/api/analyze") {
-      server.timeout(req, analyzeIdleTimeoutSeconds);
+      server.timeout(req, config.analyzeIdleTimeoutSeconds);
     }
 
     return app.fetch(req);
