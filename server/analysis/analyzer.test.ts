@@ -300,6 +300,7 @@ describe("aggregation", () => {
 describe("output shape", () => {
   test("returns zero counts and no coverage fields for empty input", () => {
     expect(run([])).toEqual({
+      countedPRs: 0,
       totalReviews: 0,
       uniqueReviewers: 0,
       avgReviewsPerPR: 0,
@@ -368,6 +369,24 @@ describe("bots", () => {
     expect(result.totalReviews).toBe(2);
     expect(result.avgReviewsPerPR).toBe(2);
     expect(result.firstResponse.respondedPRs).toBe(1);
+  });
+
+  test("countedPRs, the Total PRs card, counts the same PRs as the other metrics", () => {
+    const humanAndBot = [
+      makePR({ number: 1, reviews: [makeReview({ by: "bob" })] }),
+      makePR({ number: 2, author: "renovate", authorType: "Bot" }),
+    ];
+
+    const excluded = run(humanAndBot);
+    expect(excluded.countedPRs).toBe(1);
+    expect(excluded.avgReviewsPerPR).toBe(1);
+    expect(excluded.firstResponse.respondedPRs).toBe(1);
+    expect(excluded.firstResponse.closedWithoutResponsePRs).toBe(0);
+
+    const included = run(humanAndBot, { includeBots: true });
+    expect(included.countedPRs).toBe(2);
+    expect(included.avgReviewsPerPR).toBe(0.5);
+    expect(included.firstResponse.closedWithoutResponsePRs).toBe(1);
   });
 
   test("by default, reports the bot PRs and bot reviews it left out", () => {

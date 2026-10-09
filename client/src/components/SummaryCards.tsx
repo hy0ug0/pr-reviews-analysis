@@ -4,10 +4,12 @@ interface SummaryCardsProps {
   data: AnalysisResult;
 }
 
-type SummaryMetricKey = "matchingPRs" | "totalReviews" | "uniqueReviewers" | "avgReviewsPerPR";
+type SummaryMetricKey = "countedPRs" | "totalReviews" | "uniqueReviewers" | "avgReviewsPerPR";
 
+// Total PRs is the set every other metric counts, so the cards agree with each other and
+// with the first response section. The incomplete-results warning reports matchingPRs.
 const cards: { label: string; key: SummaryMetricKey; decimals?: number }[] = [
-  { label: "Total PRs", key: "matchingPRs" },
+  { label: "Total PRs", key: "countedPRs" },
   { label: "Total Reviews", key: "totalReviews" },
   { label: "Unique Reviewers", key: "uniqueReviewers" },
   { label: "Avg Reviews / PR", key: "avgReviewsPerPR", decimals: 1 },

@@ -81,6 +81,7 @@ export function analyze(loadedPRs: PullRequest[], options: AnalyzeOptions): Anal
   );
 
   return {
+    countedPRs: prs.length,
     excludedBots: rulesWithBots
       ? { prs: loadedPRs.length - prs.length, reviews: excludedBotReviews }
       : null,

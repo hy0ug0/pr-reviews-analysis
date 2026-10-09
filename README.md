@@ -44,7 +44,7 @@ By default the analysis leaves bots out. A bot is a GitHub App (such as Renovate
 - PRs opened by a bot count in no metric.
 - Reviews and comments by a bot count neither as reviews nor as a first response.
 
-A line under the summary cards shows how many bot PRs and bot reviews were left out. The **Total PRs** card still counts every PR the search matched, bot PRs included. Tick **Include bots** in the form to count them like anyone else. The filter applies after the cache, so switching it reuses the cached data.
+A line under the summary cards shows how many bot PRs and bot reviews were left out. The **Total PRs** card counts the PRs the metrics use, so it leaves bot PRs out too. Tick **Include bots** in the form to count them like anyone else. The filter applies after the cache, so switching it reuses the cached data.
 
 ## Cache
 

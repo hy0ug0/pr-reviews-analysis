@@ -152,6 +152,7 @@ export const dataSourceSchema = z.object({
 });
 
 export const analysisResultSchema = z.object({
+  countedPRs: z.number(),
   excludedBots: z.object({ prs: z.number(), reviews: z.number() }).nullable(),
   matchingPRs: z.number(),
   analyzedPRs: z.number(),

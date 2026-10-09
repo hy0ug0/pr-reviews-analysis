@@ -30,7 +30,8 @@ const checkboxLabelClass =
   "inline-flex items-start gap-2 text-sm text-gray-700 dark:text-slate-300 cursor-pointer select-none";
 const checkboxClass =
   "mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800";
-const checkboxHintClass = "block text-xs text-gray-400 dark:text-slate-500";
+// Darker than the field hints above: at 12px, gray-400 and slate-500 miss 4.5:1 contrast.
+const checkboxHintClass = "block text-xs text-gray-500 dark:text-slate-400";
 
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;

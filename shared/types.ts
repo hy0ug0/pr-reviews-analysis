@@ -73,6 +73,9 @@ export interface ExcludedBots {
 
 // What analyze() computes from the loaded PRs.
 export interface AnalysisMetrics {
+  // The PRs every metric counts: the analyzed PRs, minus those bots opened when bots are
+  // excluded.
+  countedPRs: number;
   // Null when the request included bots.
   excludedBots: ExcludedBots | null;
   totalReviews: number;
