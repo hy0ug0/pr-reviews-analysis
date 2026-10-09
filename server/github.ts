@@ -2,8 +2,7 @@ import { execFile } from "node:child_process";
 import type { AppSuggestion, PRReview, PullRequest } from "../shared/types.ts";
 import { createLogger } from "./logger.ts";
 import {
-  mergeReviewPages,
-  toPullRequest,
+  resolveReviews,
   type PageInfo,
   type ReviewConnection,
   type SearchPullRequestNode,
@@ -193,12 +192,16 @@ interface DateWindow {
   until: string;
 }
 
-interface FetchWindowResult {
-  issueCount: number;
-  prs: SearchPullRequestNode[];
-  isComplete: boolean;
-  partialReasons: string[];
-}
+// "split": the window matches more PRs than Search returns and can be halved.
+type FetchWindowResult =
+  | { kind: "split"; issueCount: number; halves: [DateWindow, DateWindow] }
+  | {
+      kind: "fetched";
+      issueCount: number;
+      prs: SearchPullRequestNode[];
+      isComplete: boolean;
+      partialReasons: string[];
+    };
 
 interface RepoFetchResult {
   prs: PullRequest[];
@@ -523,36 +526,6 @@ export async function fetchUserSuggestions(
   }
 }
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  mapper: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  if (items.length === 0) return [];
-
-  const results: Array<R | undefined> = Array.from({ length: items.length });
-  const workerCount = Math.max(1, Math.min(limit, items.length));
-  let nextIndex = 0;
-
-  async function worker(): Promise<void> {
-    while (true) {
-      const currentIndex = nextIndex;
-      nextIndex++;
-      if (currentIndex >= items.length) return;
-      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
-    }
-  }
-
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
-
-  return results.map((result, index) => {
-    if (result === undefined) {
-      throw new Error(`Concurrency mapping failed at index ${index}.`);
-    }
-    return result;
-  });
-}
-
 async function fetchWindowPullRequests(
   repo: string,
   label: string | undefined,
@@ -568,20 +541,20 @@ async function fetchWindowPullRequests(
   });
   const issueCount = firstPage.search.issueCount;
   const partialReasons: string[] = [];
-  const prs: SearchPullRequestNode[] = [...firstPage.search.nodes];
+  let isComplete = true;
 
-  // The caller splits this window and discards its PRs, so skip the remaining pages.
-  if (issueCount > SEARCH_HARD_LIMIT && splitWindow(window)) {
-    log.info(
-      `Window ${window.since}..${window.until}: ${issueCount} matches exceed ${SEARCH_HARD_LIMIT}; stopping after page 1 to split`,
+  if (issueCount > SEARCH_HARD_LIMIT) {
+    // Stop after page 1: the caller fetches each half instead.
+    const halves = splitWindow(window);
+    if (halves) return { kind: "split", issueCount, halves };
+
+    isComplete = false;
+    partialReasons.push(
+      `A single-day window (${window.since}) in ${repo} has more than ${SEARCH_HARD_LIMIT} matching PRs and cannot be split further.`,
     );
-    return {
-      issueCount,
-      prs,
-      isComplete: false,
-      partialReasons,
-    };
   }
+
+  const prs: SearchPullRequestNode[] = [...firstPage.search.nodes];
   let hasNextPage = firstPage.search.pageInfo.hasNextPage;
   let cursor = firstPage.search.pageInfo.endCursor;
   let pagesFetched = 1;
@@ -598,6 +571,7 @@ async function fetchWindowPullRequests(
         `GitHub Search limit reached for ${repo} (${window.since}..${window.until}); only first ${SEARCH_HARD_LIMIT} PRs were accessible in this window.`,
       );
       return {
+        kind: "fetched",
         issueCount,
         prs,
         isComplete: false,
@@ -620,9 +594,10 @@ async function fetchWindowPullRequests(
 
   log.info(`Completed window ${window.since}..${window.until}: ${prs.length} PR nodes fetched`);
   return {
+    kind: "fetched",
     issueCount,
     prs,
-    isComplete: true,
+    isComplete,
     partialReasons,
   };
 }
@@ -644,7 +619,7 @@ async function fetchPullRequestReviews(
       number,
       first: REVIEW_PAGE_SIZE,
     };
-    if (cursor) variables.after = cursor;
+    if (cursor !== null) variables.after = cursor;
 
     const data = await ghGraphqlWithRetry<ReviewsResponse>(PR_REVIEWS_QUERY, variables);
     const pullRequest = data.repository?.pullRequest;
@@ -658,12 +633,6 @@ async function fetchPullRequestReviews(
   }
 
   return reviews;
-}
-
-// Returns every review of a PR whose first page came inline with the search results.
-async function fetchRemainingReviews(repo: string, pr: SearchPullRequestNode): Promise<PRReview[]> {
-  const remaining = await fetchPullRequestReviews(repo, pr.number, pr.reviews.pageInfo.endCursor);
-  return mergeReviewPages(pr.reviews, remaining);
 }
 
 async function fetchRepoPullRequests(
@@ -694,21 +663,13 @@ async function fetchRepoPullRequests(
     log.info(`Processing window ${window.since}..${window.until} for ${repo}`);
     const windowResult = await fetchWindowPullRequests(repo, label, window);
 
-    if (windowResult.issueCount > SEARCH_HARD_LIMIT) {
-      const split = splitWindow(window);
-      if (split) {
-        const [left, right] = split;
-        log.info(
-          `Window ${window.since}..${window.until} has ${windowResult.issueCount} matches; splitting into ${left.since}..${left.until} and ${right.since}..${right.until}`,
-        );
-        windowsToFetch.push(right, left);
-        continue;
-      }
-
-      isComplete = false;
-      partialReasons.push(
-        `A single-day window (${window.since}) in ${repo} has more than ${SEARCH_HARD_LIMIT} matching PRs and cannot be split further.`,
+    if (windowResult.kind === "split") {
+      const [left, right] = windowResult.halves;
+      log.info(
+        `Window ${window.since}..${window.until} has ${windowResult.issueCount} matches; splitting into ${left.since}..${left.until} and ${right.since}..${right.until}`,
       );
+      windowsToFetch.push(right, left);
+      continue;
     }
 
     matchingPRs += windowResult.issueCount;
@@ -727,62 +688,21 @@ async function fetchRepoPullRequests(
     );
   }
 
-  const overflowPRs = prNodes.filter((pr) => pr.reviews.pageInfo.hasNextPage);
-  log.info(
-    `${overflowPRs.length}/${prNodes.length} PRs in ${repo} need extra review pages (concurrency=${REVIEW_FETCH_CONCURRENCY})`,
-  );
-  let completedReviewFetches = 0;
-  const continuedPRs = await mapWithConcurrency(
-    overflowPRs,
-    REVIEW_FETCH_CONCURRENCY,
-    async (pr): Promise<{ pullRequest: PullRequest; isComplete: boolean; reason?: string }> => {
-      try {
-        const reviews = await fetchRemainingReviews(repo, pr);
-        completedReviewFetches++;
-        if (
-          overflowPRs.length <= 20 ||
-          completedReviewFetches % 10 === 0 ||
-          completedReviewFetches === overflowPRs.length
-        ) {
-          log.info(
-            `Review fetch progress for ${repo}: ${completedReviewFetches}/${overflowPRs.length} PRs completed`,
-          );
-        }
-        return { pullRequest: toPullRequest(pr, reviews), isComplete: true };
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : "Unknown review fetch error";
-        completedReviewFetches++;
-        log.warn(
-          `Review fetch failed for ${repo}#${pr.number} (${completedReviewFetches}/${overflowPRs.length}): ${message}`,
-        );
-        return {
-          pullRequest: toPullRequest(pr, pr.reviews.nodes),
-          isComplete: false,
-          reason: `Failed to fetch complete reviews for ${repo}#${pr.number}: ${message}`,
-        };
-      }
-    },
-  );
-  const continuedByNumber = new Map(continuedPRs.map((item) => [item.pullRequest.number, item]));
-
-  const completePRs: PullRequest[] = [];
-  for (const pr of prNodes) {
-    const item = continuedByNumber.get(pr.number) ?? {
-      pullRequest: toPullRequest(pr, pr.reviews.nodes),
-      isComplete: true,
-    };
-    completePRs.push(item.pullRequest);
-    if (!item.isComplete) {
-      isComplete = false;
-      if (item.reason) partialReasons.push(item.reason);
-    }
-  }
+  const resolved = await resolveReviews({
+    repo,
+    prNodes,
+    fetchContinuation: (pr) =>
+      fetchPullRequestReviews(repo, pr.number, pr.reviews.pageInfo.endCursor),
+    concurrency: REVIEW_FETCH_CONCURRENCY,
+  });
+  if (!resolved.isComplete) isComplete = false;
+  partialReasons.push(...resolved.partialReasons);
 
   log.info(
-    `Completed repo fetch for ${repo}: analyzed ${completePRs.length} PRs, matching ${matchingPRs}, complete=${isComplete}`,
+    `Completed repo fetch for ${repo}: analyzed ${resolved.prs.length} PRs, matching ${matchingPRs}, complete=${isComplete}`,
   );
   return {
-    prs: completePRs,
+    prs: resolved.prs,
     matchingPRs,
     isComplete,
     partialReasons: uniqueReasons(partialReasons),
