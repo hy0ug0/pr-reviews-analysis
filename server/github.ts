@@ -68,6 +68,7 @@ fragment PullRequestFields on PullRequest {
     nodes { ...ReviewFields }
   }
   comments(first: ${COMMENTS_PAGE_SIZE}) {
+    pageInfo { hasNextPage }
     nodes {
       author { login __typename }
       createdAt

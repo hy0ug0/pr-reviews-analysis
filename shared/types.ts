@@ -44,8 +44,9 @@ export interface PullRequest {
   reviews: {
     nodes: PRReview[];
   };
-  // The oldest COMMENTS_PAGE_SIZE comments at most.
+  // The oldest COMMENTS_PAGE_SIZE comments at most; hasNextPage says whether more exist.
   comments: {
+    pageInfo: { hasNextPage: boolean };
     nodes: PRComment[];
   };
 }

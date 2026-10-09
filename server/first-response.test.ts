@@ -65,6 +65,7 @@ function makePR({
   readyForReviewAt = null,
   reviews = [],
   comments = [],
+  moreComments = false,
 }: {
   number?: number;
   author?: string;
@@ -75,6 +76,8 @@ function makePR({
   readyForReviewAt?: string | null;
   reviews?: PRReview[];
   comments?: PRComment[];
+  // Whether GitHub has comments past the fetched page.
+  moreComments?: boolean;
 }): PullRequest {
   return {
     number,
@@ -89,7 +92,7 @@ function makePR({
     readyForReviewAt,
     author: { login: author },
     reviews: { nodes: reviews },
-    comments: { nodes: comments },
+    comments: { pageInfo: { hasNextPage: moreComments }, nodes: comments },
   };
 }
 
@@ -247,6 +250,7 @@ describe("classifyFirstResponse", () => {
         classify({
           ...pr,
           comments: {
+            ...pr.comments,
             nodes: [
               ...pr.comments.nodes,
               comment({ by: "dave", createdAt: "2026-03-05T10:00:00Z" }),
@@ -307,7 +311,7 @@ describe("classifyFirstResponse", () => {
     expect(outcome.kind).toBe("closedWithoutResponse");
   });
 
-  describe("when the comments page is full", () => {
+  describe("when GitHub has more comments than were fetched", () => {
     const botComments = Array.from({ length: COMMENTS_PAGE_SIZE }, (_, index) =>
       comment({
         by: "vercel",
@@ -318,13 +322,16 @@ describe("classifyFirstResponse", () => {
     const lastFetchedCommentAt = at(CREATED_AT) + COMMENTS_PAGE_SIZE * HOUR;
 
     test("is undetermined when no fetched comment qualifies and nothing came first", () => {
-      expect(classify(makePR({ comments: botComments })).kind).toBe("undetermined");
+      expect(classify(makePR({ comments: botComments, moreComments: true })).kind).toBe(
+        "undetermined",
+      );
     });
 
     test("is undetermined when the only review comes after the last fetched comment", () => {
       const outcome = classify(
         makePR({
           comments: botComments,
+          moreComments: true,
           reviews: [
             review({
               by: "bob",
@@ -341,6 +348,7 @@ describe("classifyFirstResponse", () => {
       const outcome = classify(
         makePR({
           comments: botComments,
+          moreComments: true,
           reviews: [review({ by: "bob", submittedAt: "2026-03-02T11:30:00Z" })],
         }),
       );
@@ -354,14 +362,43 @@ describe("classifyFirstResponse", () => {
           state: "CLOSED",
           closedAt: new Date(lastFetchedCommentAt - HOUR).toISOString(),
           comments: botComments,
+          moreComments: true,
         }),
       );
 
       expect(outcome.kind).toBe("closedWithoutResponse");
     });
 
-    test("is not undetermined with one comment fewer than the page size", () => {
-      expect(classify(makePR({ comments: botComments.slice(1) })).kind).toBe("waiting");
+    test("is undetermined when the PR closed at the exact time of the last fetched comment", () => {
+      // An unseen comment at that same instant would still count, as isInWindow is inclusive.
+      const outcome = classify(
+        makePR({
+          state: "CLOSED",
+          closedAt: new Date(lastFetchedCommentAt).toISOString(),
+          comments: botComments,
+          moreComments: true,
+        }),
+      );
+
+      expect(outcome.kind).toBe("undetermined");
+    });
+
+    test("is never undetermined when the full page holds every comment", () => {
+      const outcome = classify(
+        makePR({
+          comments: botComments,
+          moreComments: false,
+          reviews: [
+            review({
+              by: "bob",
+              submittedAt: new Date(lastFetchedCommentAt + HOUR).toISOString(),
+            }),
+          ],
+        }),
+      );
+
+      expect(respondedAfter(outcome)).toBe((COMMENTS_PAGE_SIZE + 1) * HOUR);
+      expect(classify(makePR({ comments: botComments, moreComments: false })).kind).toBe("waiting");
     });
   });
 });

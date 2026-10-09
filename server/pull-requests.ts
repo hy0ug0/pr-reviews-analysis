@@ -48,6 +48,7 @@ export const pullRequestSchema = z.object({
     ),
   }),
   comments: z.object({
+    pageInfo: z.object({ hasNextPage: z.boolean() }),
     nodes: z.array(z.object({ author: actorSchema, createdAt: z.string() })),
   }),
 });

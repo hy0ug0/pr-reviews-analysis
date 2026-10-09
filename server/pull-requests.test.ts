@@ -102,6 +102,7 @@ function makePR(number: number, updatedAt = "2026-03-20T09:00:00Z"): PullRequest
       ],
     },
     comments: {
+      pageInfo: { hasNextPage: false },
       nodes: [
         { author: { login: "ci", __typename: "Bot" }, createdAt: "2026-03-01T09:05:00Z" },
         { author: null, createdAt: "2026-03-03T10:00:00Z" },

@@ -39,7 +39,7 @@ function makeNode(number: number, hasMoreReviews = false): PullRequestNode {
       pageInfo: { hasNextPage: hasMoreReviews, endCursor: `cursor-${number}` },
       nodes: [makeReview("alice")],
     },
-    comments: { nodes: [] },
+    comments: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }
 

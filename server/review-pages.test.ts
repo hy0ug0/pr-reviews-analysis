@@ -24,6 +24,7 @@ function makeConnection(
 }
 
 const comments = {
+  pageInfo: { hasNextPage: false },
   nodes: [{ author: { login: "frank", __typename: "User" }, createdAt: "2026-03-01T11:00:00Z" }],
 };
 

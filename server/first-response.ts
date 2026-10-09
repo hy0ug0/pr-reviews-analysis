@@ -1,4 +1,3 @@
-import { COMMENTS_PAGE_SIZE } from "../shared/types.ts";
 import type {
   Actor,
   DurationBucket,
@@ -97,13 +96,12 @@ export function classifyFirstResponse({
     ),
   );
 
-  // Comments past the fetched page are all later than the last fetched one, so they
+  // Comments past the fetched page are all at or after the last fetched one, so they
   // can only matter when no fetched comment qualified, no review came first and the
-  // PR was still open at that point. A PR with exactly COMMENTS_PAGE_SIZE comments is
-  // treated as possibly having more.
-  if (commentAt === null && pr.comments.nodes.length >= COMMENTS_PAGE_SIZE) {
+  // PR was still open at that point (inclusive, like isInWindow).
+  if (commentAt === null && pr.comments.pageInfo.hasNextPage && commentTimes.length > 0) {
     const lastFetchedCommentAt = Math.max(...commentTimes);
-    const unseenCanCount = closedAt === null || lastFetchedCommentAt < closedAt;
+    const unseenCanCount = closedAt === null || lastFetchedCommentAt <= closedAt;
     if (unseenCanCount && (reviewAt === null || reviewAt > lastFetchedCommentAt)) {
       return { kind: "undetermined", startedAt };
     }

@@ -49,7 +49,7 @@ function makePR({
     readyForReviewAt: null,
     author: author === null ? null : { login: author },
     reviews: { nodes: reviews },
-    comments: { nodes: [] },
+    comments: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }
 
