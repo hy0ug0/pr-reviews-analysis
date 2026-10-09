@@ -68,6 +68,11 @@
       "matchPackageNames": ["oxfmt", "oxlint", "oxlint-tsgolint", "@types/node", "concurrently"]
     },
     {
+      "description": "Keep the Bun runtime (packageManager, CI) and its types on the same version.",
+      "groupName": "bun",
+      "matchPackageNames": ["bun", "@types/bun"]
+    },
+    {
       "groupName": "server stack",
       "matchPackageNames": ["hono", "@hono/zod-validator", "zod", "consola"]
     },

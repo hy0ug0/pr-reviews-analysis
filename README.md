@@ -8,7 +8,7 @@ Local tool to analyze PR review activity using GitHub data.
 
 ## Requirements
 
-- [Bun](https://bun.sh/) 1.3+
+- [Bun](https://bun.sh/) 1.4.2+
 - [GitHub CLI](https://cli.github.com/) installed and authenticated
 
 ```bash
