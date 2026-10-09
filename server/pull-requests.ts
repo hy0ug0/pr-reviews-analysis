@@ -1,19 +1,18 @@
 import { z } from "zod";
-import type { AnalyzeParams } from "../shared/types.ts";
-import { buildCacheKey, readCache, writeCache } from "./cache.ts";
+import { buildCacheKey, readCache, shortCacheKey, writeCache } from "./cache.ts";
 import { fetchPullRequests, type PullRequestFetchResult } from "./github.ts";
 import { createLogger } from "./logger.ts";
 
 const log = createLogger("pull-requests");
 
-// Bump the version whenever PullRequest, PRReview or PullRequestFetchResult change shape.
-// The schema type annotation catches added fields at compile time, but not removed ones.
+// Bump the version whenever PullRequest, PRReview or PullRequestFetchResult change shape,
+// so entries written in the old shape are never read.
 const CACHE_VERSION = 1;
 const CACHE_NAMESPACE = `pull-requests-v${CACHE_VERSION}`;
 
 const actorSchema = z.object({ login: z.string() }).nullable();
 
-export const pullRequestFetchResultSchema: z.ZodType<PullRequestFetchResult> = z.object({
+export const pullRequestFetchResultSchema = z.object({
   prs: z.array(
     z.object({
       number: z.number(),
@@ -42,7 +41,18 @@ export const pullRequestFetchResultSchema: z.ZodType<PullRequestFetchResult> = z
   partialReasons: z.array(z.string()),
 });
 
-export type PullRequestQuery = Omit<AnalyzeParams, "teamMembers">;
+// Fails to compile when the schema and PullRequestFetchResult differ in any field,
+// including optional ones that zod would otherwise strip on read.
+type Equals<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+true satisfies Equals<z.infer<typeof pullRequestFetchResultSchema>, PullRequestFetchResult>;
+
+export interface PullRequestQuery {
+  repos: string[];
+  label?: string;
+  since?: string;
+  until?: string;
+}
 
 export interface LoadedPullRequests {
   fetchResult: PullRequestFetchResult;
@@ -75,18 +85,26 @@ export async function loadPullRequests(
   const repos = normalizeRepos(query.repos);
   const cacheKey = buildPullRequestsCacheKey({ ...query, repos });
 
+  const shortKey = shortCacheKey(cacheKey);
+
   if (skipCache) {
-    log.info(`Skipping cache read for key ${cacheKey}`);
+    log.info(`Skipping cache read for key ${shortKey}`);
   } else {
     const cached = await readCache(cacheKey, pullRequestFetchResultSchema);
     if (cached) {
-      log.info(`Cache hit for key ${cacheKey}`);
+      log.info(`Cache hit for key ${shortKey}`);
       return { fetchResult: cached, cacheHit: true };
     }
-    log.info(`Cache miss for key ${cacheKey}`);
+    log.info(`Cache miss for key ${shortKey}`);
   }
 
   const fetchResult = await fetchPullRequests(repos, query.label, query.since, query.until);
-  await writeCache(cacheKey, fetchResult);
+  // A fetch can take minutes; losing it to a cache write error would be worse than not caching.
+  try {
+    await writeCache(cacheKey, fetchResult);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn(`Failed to write cache entry ${shortKey}: ${message}`);
+  }
   return { fetchResult, cacheHit: false };
 }

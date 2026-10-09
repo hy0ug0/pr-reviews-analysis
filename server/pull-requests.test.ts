@@ -1,22 +1,40 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnalysisResult } from "../shared/types.ts";
-import type { PullRequestFetchResult } from "./github.ts";
+import type { fetchPullRequests, PullRequestFetchResult } from "./github.ts";
 
-// cache.ts reads CACHE_DIR once at load time, so set it before importing.
-const cacheDir = await mkdtemp(join(tmpdir(), "pr-reviews-analysis-test-"));
+const fetchMock = mock((..._args: Parameters<typeof fetchPullRequests>) =>
+  Promise.resolve(makeFetchResult()),
+);
+await mock.module("./github.ts", () => ({ fetchPullRequests: fetchMock }));
+
+// cache.ts reads CACHE_DIR once at load time, so set it only around the import.
+const cacheDir = join(tmpdir(), `pr-reviews-analysis-test-${randomUUID()}`);
+const previousCacheDir = process.env.CACHE_DIR;
 process.env.CACHE_DIR = cacheDir;
 const { getCacheConfig, readCache, writeCache } = await import("./cache.ts");
-const { buildPullRequestsCacheKey, normalizeRepos, pullRequestFetchResultSchema } =
-  await import("./pull-requests.ts");
+const {
+  buildPullRequestsCacheKey,
+  loadPullRequests,
+  normalizeRepos,
+  pullRequestFetchResultSchema,
+} = await import("./pull-requests.ts");
+if (previousCacheDir === undefined) delete process.env.CACHE_DIR;
+else process.env.CACHE_DIR = previousCacheDir;
 
 if (getCacheConfig().cacheDir !== cacheDir) {
   throw new Error("cache.ts was loaded before CACHE_DIR was set");
 }
+await mkdir(cacheDir, { recursive: true });
 
 afterAll(() => rm(cacheDir, { recursive: true, force: true }));
+
+beforeEach(() => {
+  fetchMock.mockClear();
+});
 
 function makeFetchResult(): PullRequestFetchResult {
   return {
@@ -138,5 +156,62 @@ describe("cached pull request validation", () => {
 
     expect(await readCache(key, pullRequestFetchResultSchema)).toBeNull();
     expect(await fileExists(cacheFilePath(key))).toBe(false);
+  });
+});
+
+describe("loadPullRequests", () => {
+  test("fetches on a miss, then serves the same query from cache", async () => {
+    const query = { repos: ["acme/widgets"], label: "load-miss" };
+
+    const first = await loadPullRequests(query, { skipCache: false });
+    const second = await loadPullRequests(query, { skipCache: false });
+
+    expect(first.cacheHit).toBe(false);
+    expect(second.cacheHit).toBe(true);
+    expect(second.fetchResult).toEqual(first.fetchResult);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("skipCache ignores a cached entry, refetches and overwrites it", async () => {
+    const query = { repos: ["acme/widgets"], label: "load-skip" };
+    const key = buildPullRequestsCacheKey(query);
+    await writeCache(key, { ...makeFetchResult(), matchingPRs: 99 });
+
+    const loaded = await loadPullRequests(query, { skipCache: true });
+
+    expect(loaded.cacheHit).toBe(false);
+    expect(loaded.fetchResult.matchingPRs).toBe(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((await readCache(key, pullRequestFetchResultSchema))?.matchingPRs).toBe(2);
+  });
+
+  test("fetches with the normalized repo list", async () => {
+    await loadPullRequests(
+      {
+        repos: [" Acme/Widgets", "acme/gadgets", "ACME/WIDGETS"],
+        label: "load-normalized",
+        since: "2026-03-01",
+        until: "2026-03-31",
+      },
+      { skipCache: true },
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      ["acme/gadgets", "acme/widgets"],
+      "load-normalized",
+      "2026-03-01",
+      "2026-03-31",
+    );
+  });
+
+  test("returns the fetch result when the cache write fails", async () => {
+    const query = { repos: ["acme/widgets"], label: "load-write-fails" };
+    // A directory at the entry path makes the final rename fail.
+    await mkdir(cacheFilePath(buildPullRequestsCacheKey(query)));
+
+    const loaded = await loadPullRequests(query, { skipCache: true });
+
+    expect(loaded).toEqual({ fetchResult: makeFetchResult(), cacheHit: false });
+    expect((await readdir(cacheDir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 });
