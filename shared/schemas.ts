@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Equals } from "./type-equals";
-import type { AnalysisResult } from "./types";
+import type { AnalysisProgress, AnalysisResult } from "./types";
 
 const REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 
@@ -177,3 +177,38 @@ export const analysisResultSchema = z.object({
 // Fails to compile when the schema and AnalysisResult differ in any field, so the
 // client never strips or rejects a field the server sends.
 true satisfies Equals<z.infer<typeof analysisResultSchema>, AnalysisResult>;
+
+const repoPositionShape = {
+  repo: z.string(),
+  repoIndex: z.number(),
+  repoCount: z.number(),
+};
+
+export const analysisProgressSchema = z.discriminatedUnion("phase", [
+  z.object({ phase: z.literal("listing-cache") }),
+  z.object({
+    phase: z.literal("listing"),
+    ...repoPositionShape,
+    listed: z.number(),
+    matching: z.number().nullable(),
+    page: z.number(),
+    windowsDone: z.number(),
+    windowsTotal: z.number(),
+  }),
+  z.object({ phase: z.literal("pr-cache"), prs: z.number() }),
+  z.object({
+    phase: z.literal("fetching"),
+    ...repoPositionShape,
+    prsDone: z.number(),
+    prsTotal: z.number(),
+    repoPRsDone: z.number(),
+    repoPRsTotal: z.number(),
+    batchesDone: z.number(),
+    batchesTotal: z.number(),
+    reviewPRsDone: z.number(),
+    reviewPRsTotal: z.number().nullable(),
+  }),
+  z.object({ phase: z.literal("analyzing"), prs: z.number() }),
+]);
+
+true satisfies Equals<z.infer<typeof analysisProgressSchema>, AnalysisProgress>;

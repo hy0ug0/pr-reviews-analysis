@@ -9,6 +9,7 @@ import {
   type PullRequestListing,
 } from "./github.ts";
 import { createGitHubRun, type GitHubRun } from "./github-run.ts";
+import { startLoadRun, type LoadRun, type ProgressListener } from "./load-run.ts";
 import { mapWithConcurrency } from "./lib/concurrency.ts";
 import { uniqueReasons } from "./lib/partial-reasons.ts";
 import { createLogger } from "./logger.ts";
@@ -111,7 +112,7 @@ function errorMessage(error: unknown): string {
 
 // The server is one process, so in-memory state is enough to order concurrent requests.
 // Loads in flight, by mode and listing key, so identical concurrent requests share one.
-const inFlightLoads = new Map<string, Promise<LoadedPullRequests>>();
+const inFlightLoads = new Map<string, LoadRun<LoadedPullRequests>>();
 // The last listing started per listing key. Only that one may write the listing entry, so a
 // slower, older listing never replaces a newer one.
 const latestListingIds = new Map<string, number>();
@@ -180,9 +181,15 @@ async function storePullRequests(
 // cached updatedAt matches the listing, and fetches only the others from GitHub.
 // A request joins an identical one in flight. A skipCache request lists from GitHub, so any
 // request may join it; it never joins a plain one, which may serve the cached listing.
+// onProgress gets the load's progress, the current snapshot first, until `signal` aborts;
+// aborting only stops the progress, never the shared load.
 export function loadPullRequests(
   query: PullRequestQuery,
-  { skipCache }: { skipCache: boolean },
+  {
+    skipCache,
+    onProgress,
+    signal,
+  }: { skipCache: boolean; onProgress?: ProgressListener; signal?: AbortSignal },
 ): Promise<LoadedPullRequests> {
   const normalizedQuery = { ...query, repos: normalizeRepos(query.repos) };
   const cacheKey = buildListingCacheKey(normalizedQuery);
@@ -193,30 +200,36 @@ export function loadPullRequests(
     const inFlight = inFlightLoads.get(key);
     if (inFlight) {
       log.info(`Joining the request in flight for key ${shortCacheKey(cacheKey)}`);
-      return inFlight;
+      if (onProgress) inFlight.subscribe(onProgress, signal);
+      return inFlight.promise;
     }
   }
 
   const ownKey = skipCache ? refreshKey : loadKey;
-  const load = loadPullRequestsNow(normalizedQuery, cacheKey, skipCache).finally(() => {
-    if (inFlightLoads.get(ownKey) === load) inFlightLoads.delete(ownKey);
-  });
+  const load = startLoadRun({ phase: "listing-cache" }, (publish) =>
+    loadPullRequestsNow(normalizedQuery, cacheKey, skipCache, publish).finally(() => {
+      if (inFlightLoads.get(ownKey) === load) inFlightLoads.delete(ownKey);
+    }),
+  );
   inFlightLoads.set(ownKey, load);
-  return load;
+  if (onProgress) load.subscribe(onProgress, signal);
+  return load.promise;
 }
 
 async function loadPullRequestsNow(
   query: PullRequestQuery,
   cacheKey: string,
   skipCache: boolean,
+  publish: ProgressListener,
 ): Promise<LoadedPullRequests> {
   // Requests that join this load share its run, so they report the same numbers.
-  const run = createGitHubRun();
+  const run = createGitHubRun(publish);
   const {
     listing,
     source,
     durationMs: listingMs,
   } = await loadListing(query, cacheKey, skipCache, run);
+  publish({ phase: "pr-cache", prs: listing.prs.length });
 
   const lookups = await mapWithConcurrency(
     listing.prs,

@@ -1,5 +1,6 @@
-import { analysisResultSchema } from "../../shared/schemas";
+import { readAnalysisStream } from "./analysisStream";
 import type {
+  AnalysisProgress,
   AnalysisResult,
   AnalyzeFormValues,
   AppDefaults,
@@ -119,7 +120,8 @@ export async function fetchSuggestions(
   return data.suggestions;
 }
 
-export async function fetchAnalysis(values: AnalyzeFormValues): Promise<AnalysisResult> {
+// The query string for /api/analyze, with the preset ranges resolved to dates.
+function analyzeParams(values: AnalyzeFormValues): URLSearchParams {
   const params = new URLSearchParams();
   params.set("repo", values.repo);
   if (values.label) params.set("label", values.label);
@@ -135,18 +137,38 @@ export async function fetchAnalysis(values: AnalyzeFormValues): Promise<Analysis
     params.set("since", range.since);
     params.set("until", range.until);
   }
+  return params;
+}
 
-  let response: Response;
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+// Runs an analysis as a server-sent event stream, so a long GitHub fetch reports its
+// progress instead of leaving a request open in silence. Aborting `signal` closes this
+// stream only; the server keeps any load other requests share. A rejected query comes back
+// as a JSON 400 before any stream starts.
+export async function streamAnalysis(
+  values: AnalyzeFormValues,
+  { signal, onProgress }: { signal: AbortSignal; onProgress: (progress: AnalysisProgress) => void },
+): Promise<AnalysisResult> {
   try {
-    response = await fetch(`/api/analyze?${params}`);
-  } catch {
+    const response = await fetch(`/api/analyze?${analyzeParams(values)}`, {
+      headers: { Accept: "text/event-stream" },
+      signal,
+    });
+    const isStream = response.headers.get("content-type")?.startsWith("text/event-stream");
+    if (!response.ok || !isStream || !response.body) {
+      await readJsonResponse(response, "Failed to analyze");
+      throw new Error("Unexpected response format from server");
+    }
+    return await readAnalysisStream(response.body, onProgress);
+  } catch (error: unknown) {
+    if (isAbortError(error) || !(error instanceof TypeError)) throw error;
+    // fetch and stream reads throw TypeError when the network drops.
     throw new Error(
-      "The analysis request was interrupted before the server returned a response. Large GitHub fetches can take several minutes; try again or narrow the date range.",
+      "Lost the connection to the server during the analysis. Check that the server is running, then try again.",
+      { cause: error },
     );
   }
-
-  const data = await readJsonResponse(response, "Failed to analyze");
-  const parsed = analysisResultSchema.safeParse(data);
-  if (!parsed.success) throw new Error("Unexpected response format from server");
-  return parsed.data;
 }

@@ -28,18 +28,23 @@ export function mergeReviewPages(inline: ReviewConnection, remaining: PRReview[]
 
 // Completes the reviews of PRs whose inline page has more after it, keeping PR order.
 // A failed continuation keeps the inline reviews and marks that PR partial.
+// onProgress gets the number of PRs whose extra pages are done, out of those that need them:
+// once before the first fetch, then after each PR.
 export async function resolveReviews({
   repo,
   prNodes,
   fetchContinuation,
   concurrency,
+  onProgress = () => {},
 }: {
   repo: string;
   prNodes: PullRequestNode[];
   fetchContinuation: FetchReviewContinuation;
   concurrency: number;
+  onProgress?: (done: number, total: number) => void;
 }): Promise<ResolvedPullRequest[]> {
   const overflowPRs = prNodes.filter((pr) => pr.reviews.pageInfo.hasNextPage);
+  onProgress(0, overflowPRs.length);
   log.info(
     `${overflowPRs.length}/${prNodes.length} PRs in ${repo} need extra review pages (concurrency=${concurrency})`,
   );
@@ -51,6 +56,7 @@ export async function resolveReviews({
       try {
         const remaining = await fetchContinuation(pr);
         completedReviewFetches++;
+        onProgress(completedReviewFetches, overflowPRs.length);
         if (
           overflowPRs.length <= 20 ||
           completedReviewFetches % 10 === 0 ||
@@ -72,6 +78,7 @@ export async function resolveReviews({
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "Unknown review fetch error";
         completedReviewFetches++;
+        onProgress(completedReviewFetches, overflowPRs.length);
         log.warn(
           `Review fetch failed for ${repo}#${pr.number} (${completedReviewFetches}/${overflowPRs.length}): ${message}`,
         );

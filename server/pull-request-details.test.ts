@@ -5,6 +5,7 @@ import {
   pullRequestKey,
   readPullRequestBatch,
   type BatchEntry,
+  type BatchFetchProgress,
   type FetchPullRequestBatch,
   type PullRequestBatchResponse,
 } from "./pull-request-details.ts";
@@ -95,6 +96,41 @@ describe("pullRequestKey", () => {
 });
 
 describe("fetchPullRequestsInBatches", () => {
+  test("reports batches, then extra review pages, as they finish", async () => {
+    // PR 3 has more reviews than its inline page; batch [2, 4] fails outright.
+    const { fetchBatch: fetchFound } = fetchBatchFrom([
+      makeNode(1),
+      makeNode(2),
+      makeNode(3, true),
+    ]);
+    const fetchBatch: FetchPullRequestBatch = async (numbers) => {
+      if (numbers.includes(4)) throw new Error("timeout");
+      return fetchFound(numbers);
+    };
+    const progress: BatchFetchProgress[] = [];
+
+    await fetchPullRequestsInBatches({
+      repo: REPO,
+      numbers: [1, 3, 2, 4],
+      batchSize: 2,
+      // One batch at a time, so the order of the snapshots is fixed.
+      concurrency: 1,
+      fetchBatch,
+      fetchContinuation: async () => [makeReview("bob")],
+      onProgress: (snapshot) => progress.push(snapshot),
+    });
+
+    const base = { prsTotal: 4, batchesTotal: 2 };
+    expect(progress).toEqual([
+      { ...base, prsDone: 0, batchesDone: 0, reviewPRsDone: 0, reviewPRsTotal: null },
+      { ...base, prsDone: 2, batchesDone: 1, reviewPRsDone: 0, reviewPRsTotal: null },
+      // A failed batch still counts as done: its PRs are settled, as failures.
+      { ...base, prsDone: 4, batchesDone: 2, reviewPRsDone: 0, reviewPRsTotal: null },
+      { ...base, prsDone: 4, batchesDone: 2, reviewPRsDone: 0, reviewPRsTotal: 1 },
+      { ...base, prsDone: 4, batchesDone: 2, reviewPRsDone: 1, reviewPRsTotal: 1 },
+    ]);
+  });
+
   test("splits the numbers into batches and keeps their order", async () => {
     const numbers = [5, 3, 9, 1, 7];
     const { fetchBatch, batches } = fetchBatchFrom(numbers.map((number) => makeNode(number)));

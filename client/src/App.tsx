@@ -1,7 +1,8 @@
-import { useEffect, useReducer, useState, useSyncExternalStore } from "react";
-import type { AnalyzeFormValues, AppDefaults } from "./types";
-import { analysisReducer, initialAnalysisState } from "./analysisState";
-import { fetchAnalysis, fetchDefaults } from "./api";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import type { AppDefaults } from "./types";
+import { fetchDefaults } from "./api";
+import { useAnalysis } from "./useAnalysis";
+import { AnalysisProgressPanel } from "./components/AnalysisProgressPanel";
 import { Header } from "./components/Header";
 import { AnalyzeForm } from "./components/AnalyzeForm";
 import { SummaryCards } from "./components/SummaryCards";
@@ -26,10 +27,23 @@ function useDarkMode() {
   return useSyncExternalStore(subscribeToDarkMode, getIsDark);
 }
 
+// True from `dueAt` on; false while dueAt is null.
+function useReached(dueAt: number | null): boolean {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (dueAt === null) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, dueAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [dueAt]);
+  return dueAt !== null && now >= dueAt;
+}
+
 export default function App() {
   const isDark = useDarkMode();
-  const [{ shown, loading, error }, dispatch] = useReducer(analysisReducer, initialAnalysisState);
+  const { shown, loading, error, progress, startedAt, progressPanelDueAt, analyze, refresh } =
+    useAnalysis();
   const result = shown?.result ?? null;
+  const showProgress = useReached(progressPanelDueAt);
   const [defaults, setDefaults] = useState<AppDefaults | undefined>(undefined);
 
   useEffect(() => {
@@ -43,22 +57,6 @@ export default function App() {
         // Silently ignore — form will use its own built-in fallback values.
       });
   }, []);
-
-  const handleAnalyze = async (values: AnalyzeFormValues) => {
-    dispatch({ kind: "started" });
-    try {
-      dispatch({ kind: "succeeded", values, result: await fetchAnalysis(values) });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "An error occurred";
-      dispatch({ kind: "failed", message });
-    }
-  };
-
-  // Reruns the shown analysis without the cache. The form, and its "Refresh from GitHub"
-  // checkbox, stay as they are.
-  const handleRefresh = () => {
-    if (shown) void handleAnalyze({ ...shown.values, skipCache: true });
-  };
 
   const showTruncatedWarning = result && !result.isComplete;
   const truncatedMessage = result
@@ -78,21 +76,10 @@ export default function App() {
     <div className="bg-slate-50 dark:bg-slate-950 text-gray-900 dark:text-slate-100 min-h-screen font-sans">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Header />
-        <AnalyzeForm onSubmit={handleAnalyze} loading={loading} defaults={defaults} />
+        <AnalyzeForm onSubmit={analyze} loading={loading} defaults={defaults} />
 
-        {loading && (
-          <div className="flex flex-col items-center justify-center py-16">
-            <div className="relative">
-              <div className="w-12 h-12 rounded-full border-4 border-gray-200 dark:border-slate-700" />
-              <div className="w-12 h-12 rounded-full border-4 border-indigo-600 border-t-transparent animate-spin absolute top-0 left-0" />
-            </div>
-            <p className="mt-4 text-gray-500 dark:text-slate-400 text-sm">
-              Fetching and analyzing PR data...
-            </p>
-            <p className="mt-1 text-gray-400 dark:text-slate-500 text-xs">
-              This may take a moment for large repositories
-            </p>
-          </div>
+        {showProgress && startedAt !== null && (
+          <AnalysisProgressPanel progress={progress} startedAt={startedAt} />
         )}
 
         {error && (
@@ -147,7 +134,7 @@ export default function App() {
                   dataSource={result.dataSource}
                   matchingPRs={result.matchingPRs}
                   loading={loading}
-                  onRefresh={handleRefresh}
+                  onRefresh={refresh}
                 />
               )}
               <SummaryCards data={result} />

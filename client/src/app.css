@@ -2,6 +2,17 @@
 
 @theme {
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --animate-progress-sweep: progress-sweep 1.6s ease-in-out infinite;
+
+  /* The indeterminate part of the analysis progress bar: a segment crossing the track. */
+  @keyframes progress-sweep {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(300%);
+    }
+  }
 }
 
 ::-webkit-scrollbar {
