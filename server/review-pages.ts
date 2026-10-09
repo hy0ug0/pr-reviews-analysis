@@ -66,6 +66,7 @@ export async function resolveReviews({
             repo,
             node: pr,
             reviews: mergeReviewPages(pr.reviews, remaining),
+            hasMoreReviews: false,
           }),
         };
       } catch (error: unknown) {
@@ -76,7 +77,12 @@ export async function resolveReviews({
         );
         return {
           kind: "partial",
-          pullRequest: toPullRequest({ repo, node: pr, reviews: pr.reviews.nodes }),
+          pullRequest: toPullRequest({
+            repo,
+            node: pr,
+            reviews: pr.reviews.nodes,
+            hasMoreReviews: true,
+          }),
           reason: `Failed to fetch complete reviews for ${repo}#${pr.number}: ${message}`,
         };
       }
@@ -88,7 +94,12 @@ export async function resolveReviews({
     (pr) =>
       continuedByNumber.get(pr.number) ?? {
         kind: "complete",
-        pullRequest: toPullRequest({ repo, node: pr, reviews: pr.reviews.nodes }),
+        pullRequest: toPullRequest({
+          repo,
+          node: pr,
+          reviews: pr.reviews.nodes,
+          hasMoreReviews: false,
+        }),
       },
   );
 }

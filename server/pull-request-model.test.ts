@@ -36,6 +36,7 @@ function rawNode(overrides: Record<string, unknown> = {}): Record<string, unknow
     timelineItems: { nodes: [] },
     reviews: { pageInfo: { hasNextPage: false, endCursor: "cursor-1" }, nodes: [review] },
     comments,
+    reviewRequestEvents: { pageInfo: { hasNextPage: false }, nodes: [] },
     ...overrides,
   };
 }
@@ -93,6 +94,21 @@ describe("pullRequestNodeSchema", () => {
     expect(node.comments.nodes).toEqual([]);
   });
 
+  test("rejects an unknown requested reviewer type rather than guessing", () => {
+    const reviewRequestEvents = {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          __typename: "ReviewRequestedEvent",
+          createdAt: "2026-03-01T10:00:00Z",
+          requestedReviewer: { __typename: "Organization", login: "acme" },
+        },
+      ],
+    };
+
+    expect(pullRequestNodeSchema.safeParse(rawNode({ reviewRequestEvents })).success).toBe(false);
+  });
+
   test("rejects a node with a missing or mistyped field", () => {
     expect(pullRequestNodeSchema.safeParse(rawNode({ updatedAt: undefined })).success).toBe(false);
     expect(pullRequestNodeSchema.safeParse(rawNode({ state: "DRAFT" })).success).toBe(false);
@@ -101,7 +117,12 @@ describe("pullRequestNodeSchema", () => {
 
 describe("toPullRequest", () => {
   test("sets repo, flattens the connections and matches pullRequestSchema", () => {
-    const pullRequest = toPullRequest({ repo: REPO, node: parseNode(), reviews: [review] });
+    const pullRequest = toPullRequest({
+      repo: REPO,
+      node: parseNode(),
+      reviews: [review],
+      hasMoreReviews: false,
+    });
 
     expect(Object.keys(pullRequest)).toEqual([
       "repo",
@@ -118,9 +139,10 @@ describe("toPullRequest", () => {
       "readyForReviewAt",
       "reviews",
       "comments",
+      "reviewRequests",
     ]);
     expect(pullRequest.repo).toBe(REPO);
-    expect(pullRequest.reviews).toEqual({ nodes: [review] });
+    expect(pullRequest.reviews).toEqual({ pageInfo: { hasNextPage: false }, nodes: [review] });
     expect(pullRequest.comments).toEqual(comments);
     expect(pullRequestSchema.parse(pullRequest)).toEqual(pullRequest);
   });
@@ -133,7 +155,12 @@ describe("toPullRequest", () => {
       },
     });
 
-    const pullRequest = toPullRequest({ repo: REPO, node, reviews: node.reviews.nodes });
+    const pullRequest = toPullRequest({
+      repo: REPO,
+      node,
+      reviews: node.reviews.nodes,
+      hasMoreReviews: false,
+    });
 
     expect(pullRequest.reviews.nodes).toEqual([review]);
   });
@@ -141,14 +168,90 @@ describe("toPullRequest", () => {
   test("takes readyForReviewAt from the first ready-for-review event", () => {
     const node = parseNode({ timelineItems: { nodes: [{ createdAt: "2026-03-02T08:00:00Z" }] } });
 
-    expect(toPullRequest({ repo: REPO, node, reviews: [] }).readyForReviewAt).toBe(
-      "2026-03-02T08:00:00Z",
-    );
+    expect(
+      toPullRequest({ repo: REPO, node, reviews: [], hasMoreReviews: false }).readyForReviewAt,
+    ).toBe("2026-03-02T08:00:00Z");
+  });
+
+  test("normalizes review request events, keeping hidden reviewers as null", () => {
+    const node = parseNode({
+      reviewRequestEvents: {
+        pageInfo: { hasNextPage: true },
+        nodes: [
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-03-01T10:00:00Z",
+            requestedReviewer: { __typename: "User", login: "alice" },
+          },
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-03-01T10:00:01Z",
+            requestedReviewer: { __typename: "Mannequin", login: "old-alice" },
+          },
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-03-01T10:00:02Z",
+            requestedReviewer: { __typename: "Bot", login: "copilot" },
+          },
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-03-01T10:00:03Z",
+            requestedReviewer: { __typename: "Team", combinedSlug: "acme/core" },
+          },
+          {
+            __typename: "ReviewRequestRemovedEvent",
+            createdAt: "2026-03-01T10:00:04Z",
+            requestedReviewer: { __typename: "EnterpriseTeam", combinedSlug: "acme-ent/ops" },
+          },
+          null,
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-03-01T10:00:05Z",
+            requestedReviewer: null,
+          },
+        ],
+      },
+    });
+
+    expect(
+      toPullRequest({ repo: REPO, node, reviews: [], hasMoreReviews: false }).reviewRequests,
+    ).toEqual({
+      pageInfo: { hasNextPage: true },
+      nodes: [
+        {
+          kind: "requested",
+          createdAt: "2026-03-01T10:00:00Z",
+          reviewer: { kind: "user", login: "alice" },
+        },
+        {
+          kind: "requested",
+          createdAt: "2026-03-01T10:00:01Z",
+          reviewer: { kind: "user", login: "old-alice" },
+        },
+        {
+          kind: "requested",
+          createdAt: "2026-03-01T10:00:02Z",
+          reviewer: { kind: "bot", login: "copilot" },
+        },
+        {
+          kind: "requested",
+          createdAt: "2026-03-01T10:00:03Z",
+          reviewer: { kind: "team", slug: "acme/core" },
+        },
+        {
+          kind: "removed",
+          createdAt: "2026-03-01T10:00:04Z",
+          reviewer: { kind: "team", slug: "acme-ent/ops" },
+        },
+        { kind: "requested", createdAt: "2026-03-01T10:00:05Z", reviewer: null },
+      ],
+    });
   });
 
   test("sets readyForReviewAt to null when the PR was never a draft", () => {
     expect(
-      toPullRequest({ repo: REPO, node: parseNode(), reviews: [] }).readyForReviewAt,
+      toPullRequest({ repo: REPO, node: parseNode(), reviews: [], hasMoreReviews: false })
+        .readyForReviewAt,
     ).toBeNull();
   });
 });

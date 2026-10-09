@@ -110,6 +110,7 @@ function makePR(number: number, updatedAt = "2026-03-20T09:00:00Z"): PullRequest
     readyForReviewAt: "2026-03-02T09:00:00Z",
     author: { login: "alice", __typename: "User" },
     reviews: {
+      pageInfo: { hasNextPage: false },
       nodes: [
         {
           author: { login: "bob", __typename: "User" },
@@ -123,6 +124,17 @@ function makePR(number: number, updatedAt = "2026-03-20T09:00:00Z"): PullRequest
       nodes: [
         { author: { login: "ci", __typename: "Bot" }, createdAt: "2026-03-01T09:05:00Z" },
         { author: null, createdAt: "2026-03-03T10:00:00Z" },
+      ],
+    },
+    reviewRequests: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          kind: "requested",
+          createdAt: "2026-03-02T09:00:00Z",
+          reviewer: { kind: "user", login: "bob" },
+        },
+        { kind: "requested", createdAt: "2026-03-02T09:00:00Z", reviewer: null },
       ],
     },
   };
@@ -195,7 +207,7 @@ describe("cache keys", () => {
       /^pull-request-listing-v3-[0-9a-f]{64}$/,
     );
     expect(buildPullRequestCacheKey({ repo: REPO, number: 1 })).toMatch(
-      /^pull-request-v5-[0-9a-f]{64}$/,
+      /^pull-request-v6-[0-9a-f]{64}$/,
     );
   });
 
@@ -457,7 +469,7 @@ describe("loadPullRequests", () => {
 
   test("serves a partial PR but does not cache it", async () => {
     setRemote(makePR(1), makePR(2));
-    const inlineOnly = { ...makePR(2), reviews: { nodes: [] } };
+    const inlineOnly = { ...makePR(2), reviews: { pageInfo: { hasNextPage: true }, nodes: [] } };
     fetchOverrides.set(`${REPO}#2`, {
       kind: "partial",
       pullRequest: inlineOnly,

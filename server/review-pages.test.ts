@@ -36,6 +36,7 @@ function makeNode(number: number, reviews: ReviewConnection): PullRequestNode {
     timelineItems: { nodes: [] },
     reviews,
     comments: { pageInfo: { hasNextPage: false }, nodes: [] },
+    reviewRequestEvents: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }
 
@@ -108,7 +109,12 @@ describe("resolveReviews", () => {
     expect(result.map((item) => item.kind)).toEqual(["complete", "partial", "complete"]);
     expect(result[1]).toEqual({
       kind: "partial",
-      pullRequest: toPullRequest({ repo: REPO, node: overflowA, reviews: inline }),
+      pullRequest: toPullRequest({
+        repo: REPO,
+        node: overflowA,
+        reviews: inline,
+        hasMoreReviews: true,
+      }),
       reason: `Failed to fetch complete reviews for ${REPO}#2: boom`,
     });
     expect(result[2].pullRequest.reviews.nodes).toEqual([...inline, ...remaining]);

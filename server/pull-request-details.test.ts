@@ -39,6 +39,7 @@ function makeNode(number: number, hasMoreReviews = false): PullRequestNode {
       nodes: [makeReview("alice")],
     },
     comments: { pageInfo: { hasNextPage: false }, nodes: [] },
+    reviewRequestEvents: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }
 
@@ -128,16 +129,64 @@ describe("fetchPullRequestsInBatches", () => {
       fetchContinuation: noContinuation,
     });
 
-    const { timelineItems: _timeline, ...node } = makeNode(1);
+    const { timelineItems: _timeline, reviewRequestEvents: _events, ...node } = makeNode(1);
     expect(item).toEqual({
       kind: "complete",
       pullRequest: {
         repo: REPO,
         ...node,
         readyForReviewAt: null,
-        reviews: { nodes: [makeReview("alice")] },
+        reviews: { pageInfo: { hasNextPage: false }, nodes: [makeReview("alice")] },
+        reviewRequests: { pageInfo: { hasNextPage: false }, nodes: [] },
       },
     });
+  });
+
+  test("marks a PR partial when it has more review request events than were fetched", async () => {
+    const truncated: PullRequestNode = {
+      ...makeNode(2),
+      reviewRequestEvents: {
+        pageInfo: { hasNextPage: true },
+        nodes: [
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-03-01T10:00:00Z",
+            requestedReviewer: { __typename: "User", login: "alice" },
+          },
+        ],
+      },
+    };
+    const { fetchBatch } = fetchBatchFrom([makeNode(1), truncated]);
+
+    const result = await fetchPullRequestsInBatches({
+      repo: REPO,
+      numbers: [1, 2],
+      batchSize: 50,
+      concurrency: 5,
+      fetchBatch,
+      fetchContinuation: noContinuation,
+    });
+
+    expect(result).toEqual([
+      { kind: "complete", pullRequest: expect.objectContaining({ number: 1 }) },
+      {
+        kind: "partial",
+        pullRequest: expect.objectContaining({
+          number: 2,
+          reviewRequests: {
+            pageInfo: { hasNextPage: true },
+            nodes: [
+              {
+                kind: "requested",
+                createdAt: "2026-03-01T10:00:00Z",
+                reviewer: { kind: "user", login: "alice" },
+              },
+            ],
+          },
+        }),
+        reason: `${REPO}#2 has more than 50 review request events; reviewer response times use the first 50.`,
+      },
+    ]);
   });
 
   test("fails only the PRs of a failed batch and of PRs GitHub did not return", async () => {
@@ -234,7 +283,7 @@ describe("fetchPullRequestsInBatches", () => {
       kind: "partial",
       pullRequest: expect.objectContaining({
         number: 3,
-        reviews: { nodes: [makeReview("alice")] },
+        reviews: { pageInfo: { hasNextPage: true }, nodes: [makeReview("alice")] },
       }),
       reason: `Failed to fetch complete reviews for ${REPO}#3: boom`,
     });

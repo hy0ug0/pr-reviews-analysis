@@ -1,4 +1,5 @@
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useCallback, useId } from "react";
+import { formatDuration, pluralize } from "../../../shared/format";
 import type { ReviewerStats } from "../types";
 
 interface ReviewerTableProps {
@@ -6,6 +7,13 @@ interface ReviewerTableProps {
 }
 
 type SortKey = keyof ReviewerStats;
+
+// Below this many answered requests a p90 is close to the slowest single response, so it is
+// dimmed.
+const MIN_SAMPLES_FOR_P90 = 5;
+
+const RESPONSE_TOOLTIP =
+  "Time from a review request, to the reviewer or one of their teams, until their next review or comment. Draft time doesn't count, and each re-request is a new round. n is the number of answered requests.";
 
 const columns: { key: SortKey; label: string; align: "left" | "right"; tooltip?: string }[] = [
   { key: "login", label: "Reviewer", align: "left" },
@@ -41,6 +49,18 @@ const columns: { key: SortKey; label: string; align: "left" | "right"; tooltip?:
     align: "right",
     tooltip: "Number of reviews submitted as a comment only (no approval or change request).",
   },
+  {
+    key: "responseP50Ms",
+    label: "Response p50",
+    align: "right",
+    tooltip: `Median response time. ${RESPONSE_TOOLTIP}`,
+  },
+  {
+    key: "responseP90Ms",
+    label: "p90",
+    align: "right",
+    tooltip: `90th percentile response time: 9 in 10 requests were answered faster. Dimmed with fewer than ${MIN_SAMPLES_FOR_P90} answered requests, where it is mostly the slowest one.`,
+  },
 ];
 
 function cellColor(key: SortKey) {
@@ -53,16 +73,22 @@ function cellColor(key: SortKey) {
       return "font-medium text-amber-600 dark:text-amber-400";
     case "comments":
       return "font-medium text-sky-600 dark:text-sky-400";
+    // Darker than the counts, so a dimmed p90 stands apart at a readable contrast.
+    case "responseP50Ms":
+    case "responseP90Ms":
+      return "text-gray-900 dark:text-slate-100";
     default:
       return "text-gray-600 dark:text-slate-300";
   }
 }
 
+// Nulls (no response sample) sort last in both directions.
 function compareStats(
   a: ReviewerStats[SortKey],
   b: ReviewerStats[SortKey],
   sortAsc: boolean,
 ): number {
+  if (a === null || b === null) return (a === null ? 1 : 0) - (b === null ? 1 : 0);
   if (typeof a === "string" && typeof b === "string") {
     return sortAsc ? a.localeCompare(b) : b.localeCompare(a);
   }
@@ -70,6 +96,48 @@ function compareStats(
     return sortAsc ? a - b : b - a;
   }
   return 0;
+}
+
+// Minutes with one decimal; empty without a sample.
+function toCsvMinutes(ms: number | null): string {
+  return ms === null ? "" : (ms / 60_000).toFixed(1);
+}
+
+type ResponseKey = "responseP50Ms" | "responseP90Ms";
+
+function isResponseKey(key: SortKey): key is ResponseKey {
+  return key === "responseP50Ms" || key === "responseP90Ms";
+}
+
+function ResponseCell({ stats, column }: { stats: ReviewerStats; column: ResponseKey }) {
+  const value = stats[column];
+  if (value === null) {
+    return (
+      <span className="text-gray-400 dark:text-slate-500" title="No answered review request">
+        –
+      </span>
+    );
+  }
+  const answered = pluralize(stats.responseSamples, "answered request");
+  if (column === "responseP90Ms") {
+    const isNoisy = stats.responseSamples < MIN_SAMPLES_FOR_P90;
+    return (
+      <span
+        className={isNoisy ? "text-gray-500 dark:text-slate-400" : undefined}
+        title={isNoisy ? `Only ${answered}: too few for a stable p90` : answered}
+      >
+        {formatDuration(value)}
+      </span>
+    );
+  }
+  return (
+    <span title={answered}>
+      <span className="mr-2 text-xs text-gray-500 dark:text-slate-400">
+        n={stats.responseSamples}
+      </span>
+      {formatDuration(value)}
+    </span>
+  );
 }
 
 function exportCsv(stats: ReviewerStats[]) {
@@ -80,6 +148,9 @@ function exportCsv(stats: ReviewerStats[]) {
     "Approvals",
     "Changes Requested",
     "Comments",
+    "Response p50 (min)",
+    "Response p90 (min)",
+    "Answered Requests",
   ];
   const rows = stats.map((s) => [
     s.login,
@@ -88,6 +159,9 @@ function exportCsv(stats: ReviewerStats[]) {
     s.approvals,
     s.changesRequested,
     s.comments,
+    toCsvMinutes(s.responseP50Ms),
+    toCsvMinutes(s.responseP90Ms),
+    s.responseSamples,
   ]);
   const csv = [headers, ...rows].map((r) => r.join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
@@ -105,13 +179,14 @@ interface TooltipState {
   y: number;
 }
 
-function TooltipIcon({ text }: { text: string }) {
+// A focusable info button: the tooltip shows on hover and on keyboard focus, and screen
+// readers get the text as the button's description.
+function TooltipIcon({ text, label }: { text: string; label: string }) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
-  const iconRef = useRef<SVGSVGElement>(null);
+  const descriptionId = useId();
 
   const show = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
+    (e: React.MouseEvent | React.FocusEvent) => {
       const rect = e.currentTarget.getBoundingClientRect();
       setTooltip({ text, x: rect.left + rect.width / 2, y: rect.top });
     },
@@ -122,24 +197,35 @@ function TooltipIcon({ text }: { text: string }) {
 
   return (
     <>
-      <svg
-        ref={iconRef}
+      <button
+        type="button"
+        aria-label={`About ${label}`}
+        aria-describedby={descriptionId}
         onMouseEnter={show}
         onMouseLeave={hide}
-        onClick={(e) => e.stopPropagation()}
-        className="w-3 h-3 text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 transition-colors cursor-default shrink-0"
-        fill="currentColor"
-        viewBox="0 0 20 20"
+        onFocus={show}
+        onBlur={hide}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") hide();
+        }}
+        className="relative z-10 shrink-0 rounded-full cursor-default text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400"
       >
-        <path
-          fillRule="evenodd"
-          d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z"
-          clipRule="evenodd"
-        />
-      </svg>
+        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+          <path
+            fillRule="evenodd"
+            d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z"
+            clipRule="evenodd"
+          />
+        </svg>
+      </button>
+      {/* Hidden, so it stays out of the column header's name; aria-describedby still reads it. */}
+      <span id={descriptionId} hidden>
+        {text}
+      </span>
       {tooltip && (
         <div
-          className="fixed z-50 w-56 rounded-lg bg-gray-900 dark:bg-slate-700 px-3 py-2 text-xs font-normal text-white normal-case tracking-normal leading-relaxed shadow-lg pointer-events-none text-left"
+          aria-hidden="true"
+          className="fixed z-50 w-56 rounded-lg bg-gray-900 dark:bg-slate-700 px-3 py-2 text-xs font-normal text-white normal-case tracking-normal leading-relaxed shadow-lg pointer-events-none text-left whitespace-normal"
           style={{ left: tooltip.x, top: tooltip.y - 8, transform: "translate(-50%, -100%)" }}
         >
           {tooltip.text}
@@ -171,9 +257,25 @@ export function ReviewerTable({ stats }: ReviewerTableProps) {
     }
   };
 
+  const ariaSort = (key: SortKey) => {
+    if (key !== sortKey) return "none";
+    return sortAsc ? "ascending" : "descending";
+  };
+
+  // Decorative: aria-sort on the header says the same to screen readers.
   const sortIndicator = (key: SortKey) => {
-    if (key !== sortKey) return <span className="ml-1 opacity-30 text-[10px]">⇅</span>;
-    return <span className="ml-1 text-[10px]">{sortAsc ? "↑" : "↓"}</span>;
+    if (key !== sortKey) {
+      return (
+        <span aria-hidden="true" className="ml-1 opacity-30 text-[10px]">
+          ⇅
+        </span>
+      );
+    }
+    return (
+      <span aria-hidden="true" className="ml-1 text-[10px]">
+        {sortAsc ? "↑" : "↓"}
+      </span>
+    );
   };
 
   return (
@@ -210,15 +312,26 @@ export function ReviewerTable({ stats }: ReviewerTableProps) {
               {columns.map((col) => (
                 <th
                   key={col.key}
-                  onClick={() => handleSort(col.key)}
-                  className={`px-6 py-3 text-xs font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors ${
+                  scope="col"
+                  // Names the column without the info button's "About …" label.
+                  aria-label={col.label}
+                  aria-sort={ariaSort(col.key)}
+                  className={`relative px-6 py-3 whitespace-nowrap text-xs font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider select-none hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors ${
                     col.align === "right" ? "text-right" : "text-left"
                   }`}
                 >
                   <span className="inline-flex items-center gap-1 justify-end w-full">
-                    {col.label}
-                    {col.tooltip && <TooltipIcon text={col.tooltip} />}
-                    {sortIndicator(col.key)}
+                    {/* The ::after layer makes the whole header cell the click target; the
+                        info button sits above it. */}
+                    <button
+                      type="button"
+                      onClick={() => handleSort(col.key)}
+                      className="inline-flex items-center gap-1 rounded-sm uppercase tracking-wider cursor-pointer after:absolute after:inset-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400"
+                    >
+                      {col.label}
+                      {sortIndicator(col.key)}
+                    </button>
+                    {col.tooltip && <TooltipIcon text={col.tooltip} label={col.label} />}
                   </span>
                 </th>
               ))}
@@ -256,9 +369,13 @@ export function ReviewerTable({ stats }: ReviewerTableProps) {
                 {columns.slice(1).map((col) => (
                   <td
                     key={col.key}
-                    className={`px-6 py-3 whitespace-nowrap text-right text-sm ${cellColor(col.key)}`}
+                    className={`px-6 py-3 whitespace-nowrap text-right text-sm tabular-nums ${cellColor(col.key)}`}
                   >
-                    {s[col.key]}
+                    {isResponseKey(col.key) ? (
+                      <ResponseCell stats={s} column={col.key} />
+                    ) : (
+                      s[col.key]
+                    )}
                   </td>
                 ))}
               </tr>

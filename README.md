@@ -46,18 +46,30 @@ By default the analysis leaves bots out. A bot is a GitHub App (such as Renovate
 
 A line under the summary cards shows how many bot PRs and bot reviews were left out. The **Total PRs** card counts the PRs the metrics use, so it leaves bot PRs out too. Tick **Include bots** in the form to count them like anyone else. The filter applies after the cache, so switching it reuses the cached data.
 
+## Reviewer response time
+
+The **Response p50** and **p90** columns of the reviewer table measure how long a reviewer takes to respond once asked. Each sample runs from a review request to that reviewer's next review or conversation comment on the PR:
+
+- A request to a team is credited to the first person who responds after it, timed from the team request. Team membership isn't checked, since that needs the `read:org` scope and private teams stay hidden. A reviewer's own pending request comes before a team's.
+- With **Include bots** ticked, a bot asked for review gets samples like anyone else.
+- Time as a draft doesn't count: a request made during the draft starts when the PR is ready for review.
+- A request made again after the reviewer responded starts a new sample. A request made again while one is pending keeps the first one's start.
+- A removed request, a request still pending, and a response after the PR closed give no sample.
+
+Samples come from every PR in the date range, like first response. **n** is the number of samples. With fewer than 5, the p90 is dimmed: it is close to the slowest single response. A reviewer without a counted review in the range gets no row, even if they answered requests by comment.
+
 ## Cache
 
 The server caches GitHub data on disk in two tiers:
 
 1. **PR list per query.** For a given set of repositories, label and date range, the server stores the matching PR numbers and each PR's `updatedAt`. Within `CACHE_TTL_HOURS`, the same query reuses this list without calling GitHub.
-2. **One entry per PR.** Each PR's data and reviews are stored under `owner/repo#number`. When a query lists a PR, the server reuses the cached entry if its `updatedAt` matches. Otherwise it fetches the PR again, in batches of 50 per GitHub GraphQL call.
+2. **One entry per PR.** Each PR's data and reviews are stored under `owner/repo#number`. When a query lists a PR, the server reuses the cached entry if its `updatedAt` matches. Otherwise it fetches the PR again, in batches of 25 per GitHub GraphQL call.
 
 When the list expires, or the date range changes (the time range presets end today, so they change every day), the server lists the PRs again. This is a light search without reviews. Only new and updated PRs are fetched again. Merged and closed PRs rarely change, so most PRs come from the cache.
 
 Tick **Refresh from GitHub** in the form to list the PRs again right away. Only the PRs updated since they were cached are refetched. A line above the summary cards shows how many PRs came from the cache, how many GitHub requests the run made and how long they took, and how old the cached data is. When the PR list came from the cache, its **Refresh** button reruns the same analysis this way without changing the form. The server logs the same figures once per run, as a `Cache usage:` line.
 
-A PR whose reviews could not be fetched completely is shown but not cached, so the next request fetches it again.
+A PR whose reviews could not be fetched completely, or with more than 50 review request events, is shown but not cached, so the next request fetches it again.
 
 ## Run
 
