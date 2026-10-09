@@ -11,8 +11,8 @@ import { COMMENTS_PAGE_SIZE } from "../shared/types";
 
 // Bump whenever PullRequest changes shape, so PR cache entries written in the old shape are
 // never read. Version 2 PRs had no draft, timeline or comment fields; version 3 had no repo
-// and kept review bodies.
-export const PULL_REQUEST_CACHE_VERSION = 4;
+// and kept review bodies; version 4 had no author __typename.
+export const PULL_REQUEST_CACHE_VERSION = 5;
 
 export const INLINE_REVIEW_PAGE_SIZE = 50;
 
@@ -36,7 +36,7 @@ fragment PullRequestFields on PullRequest {
   mergedAt
   closedAt
   isDraft
-  author { login }
+  author { login __typename }
   timelineItems(itemTypes: [READY_FOR_REVIEW_EVENT], first: 1) {
     nodes {
       ... on ReadyForReviewEvent { createdAt }
@@ -99,7 +99,7 @@ const pullRequestFields = {
   mergedAt: z.string().nullable(),
   closedAt: z.string().nullable(),
   isDraft: z.boolean(),
-  author: z.object({ login: z.string() }).nullable(),
+  author: actorSchema,
 };
 
 // A PR node selected with the PullRequestFields fragment, carrying the first page of its

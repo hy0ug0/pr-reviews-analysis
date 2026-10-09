@@ -1,12 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type {
-  AnalysisMetrics,
-  AnalyzeParams,
-  PRReview,
-  PullRequest,
-  ReviewState,
-} from "../../shared/types.ts";
-import { analyze } from "./analyzer.ts";
+import type { AnalysisMetrics, PRReview, PullRequest, ReviewState } from "../../shared/types.ts";
+import { analyze, type AnalyzeOptions } from "./analyzer.ts";
 
 const REPO = "acme/widgets";
 
@@ -31,10 +25,12 @@ function makeReview({
 function makePR({
   number = 1,
   author = "alice",
+  authorType = "User",
   reviews = [],
 }: {
   number?: number;
   author?: string | null;
+  authorType?: string;
   reviews?: PRReview[];
 }): PullRequest {
   return {
@@ -49,13 +45,13 @@ function makePR({
     closedAt: "2026-03-20T09:00:00Z",
     isDraft: false,
     readyForReviewAt: null,
-    author: author === null ? null : { login: author },
+    author: author === null ? null : { login: author, __typename: authorType },
     reviews: { nodes: reviews },
     comments: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }
 
-function run(prs: PullRequest[], params: Partial<AnalyzeParams> = {}): AnalysisMetrics {
+function run(prs: PullRequest[], params: Partial<AnalyzeOptions> = {}): AnalysisMetrics {
   return analyze(prs, { repos: [REPO], ...params });
 }
 
@@ -309,6 +305,7 @@ describe("output shape", () => {
       avgReviewsPerPR: 0,
       reviewerStats: [],
       firstResponse: expect.objectContaining({ respondedPRs: 0, p50Ms: null, weekly: [] }),
+      excludedBots: { prs: 0, reviews: 0 },
       timeRange: { since: "", until: "" },
     });
   });
@@ -339,5 +336,87 @@ describe("participants shared with first response", () => {
 
     expect(result.reviewerStats).toEqual([]);
     expect(result.firstResponse).toMatchObject({ respondedPRs: 0, closedWithoutResponsePRs: 1 });
+  });
+});
+
+describe("bots", () => {
+  const humanPR = makePR({
+    number: 1,
+    reviews: [
+      makeReview({ by: "bob" }),
+      makeReview({ by: "copilot-pull-request-reviewer", type: "Bot" }),
+      makeReview({ by: "ci-user" }),
+    ],
+  });
+  const renovatePR = makePR({
+    number: 2,
+    author: "renovate",
+    authorType: "Bot",
+    reviews: [makeReview({ by: "carol" })],
+  });
+  const dependabotPR = makePR({
+    number: 3,
+    author: "dependabot[bot]",
+    reviews: [makeReview({ by: "carol" })],
+  });
+  const prs = [humanPR, renovatePR, dependabotPR];
+
+  test("by default, drops bot PRs from reviewer stats and first response", () => {
+    const result = run(prs);
+
+    expect(logins(result)).toEqual(["bob", "ci-user"]);
+    expect(result.totalReviews).toBe(2);
+    expect(result.avgReviewsPerPR).toBe(2);
+    expect(result.firstResponse.respondedPRs).toBe(1);
+  });
+
+  test("by default, reports the bot PRs and bot reviews it left out", () => {
+    expect(run(prs, { botLogins: ["CI-User"] }).excludedBots).toEqual({ prs: 2, reviews: 2 });
+  });
+
+  test("treats a configured login as a bot, case-insensitively", () => {
+    const result = run(prs, { botLogins: ["CI-User"] });
+
+    expect(logins(result)).toEqual(["bob"]);
+    expect(result.totalReviews).toBe(1);
+  });
+
+  test("drops a PR opened by a configured bot login", () => {
+    const result = run([makePR({ author: "Release-Bot", reviews: [makeReview({ by: "bob" })] })], {
+      botLogins: ["release-bot"],
+    });
+
+    expect(result.reviewerStats).toEqual([]);
+    expect(result.excludedBots).toEqual({ prs: 1, reviews: 0 });
+  });
+
+  test("with bots included, keeps bot PRs and counts bot reviews", () => {
+    const result = run(prs, { includeBots: true, botLogins: ["ci-user"] });
+
+    expect(logins(result)).toEqual(["carol", "bob", "copilot-pull-request-reviewer", "ci-user"]);
+    expect(result.totalReviews).toBe(5);
+    expect(result.firstResponse.respondedPRs).toBe(3);
+    expect(result.excludedBots).toBeNull();
+  });
+
+  test("counts only bot reviews that would count with bots included", () => {
+    const result = run(
+      [
+        makePR({
+          reviews: [
+            makeReview({ by: "renovate[bot]", state: "DISMISSED" }),
+            makeReview({ by: "renovate[bot]", submittedAt: "2026-02-01T12:00:00Z" }),
+            makeReview({ by: "renovate[bot]" }),
+          ],
+        }),
+      ],
+      { since: "2026-03-01" },
+    );
+
+    expect(result.excludedBots).toEqual({ prs: 0, reviews: 1 });
+  });
+
+  test("with a team filter, does not report bot reviews the filter skips anyway", () => {
+    expect(run(prs, { teamMembers: ["bob"] }).excludedBots).toEqual({ prs: 2, reviews: 0 });
   });
 });

@@ -29,12 +29,22 @@ cp .env.example .env
 - `DEFAULT_REPOS`: pre-filled repositories (`owner/repo`, comma-separated)
 - `DEFAULT_LABEL`: pre-filled label filter
 - `DEFAULT_TEAM`: pre-filled team members (comma-separated GitHub handles)
+- `BOT_LOGINS`: bots that use regular user accounts (comma-separated GitHub logins, case-insensitive), such as `ci-user,release-bot`. See [Bots](#bots).
 - `CACHE_TTL_HOURS`: how long, in hours, to reuse the list of PRs matching a query (default `6`). The list key covers repositories, label and date range. The team filter applies after the cache, so changing the team reuses the cached data.
 - `PR_CACHE_TTL_DAYS`: how long, in days, to keep each PR's data and reviews (default `30`). A cached PR is reused while its `updatedAt` on GitHub is unchanged, whatever query listed it.
 - `CACHE_DIR`: cache directory path (default `.cache/pr-reviews-analysis`)
 - `ANALYZE_IDLE_TIMEOUT_SECONDS`: Bun idle timeout for `/api/analyze`, in seconds. Defaults to `0`, which disables the timeout for this long-running local route. Finite values must be `1..255`.
 
 The server reads these once at startup (`server/config.ts`). A numeric variable that isn't a whole number in its range, such as `CACHE_TTL_HOURS=6h`, logs a warning and uses the default.
+
+## Bots
+
+By default the analysis leaves bots out. A bot is a GitHub App (such as Renovate, Dependabot or Copilot), an account whose login ends in `[bot]`, or a login in `BOT_LOGINS`. When bots are left out:
+
+- PRs opened by a bot count in no metric.
+- Reviews and comments by a bot count neither as reviews nor as a first response.
+
+A line under the summary cards shows how many bot PRs and bot reviews were left out. The **Total PRs** card still counts every PR the search matched, bot PRs included. Tick **Include bots** in the form to count them like anyone else. The filter applies after the cache, so switching it reuses the cached data.
 
 ## Cache
 

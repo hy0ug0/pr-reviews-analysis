@@ -64,8 +64,17 @@ export interface AnalysisCoverage {
   partialReasons: string[];
 }
 
+// What excluding bots left out of the metrics: the PRs bots opened, and the reviews by bots
+// that would count if bots were included.
+export interface ExcludedBots {
+  prs: number;
+  reviews: number;
+}
+
 // What analyze() computes from the loaded PRs.
 export interface AnalysisMetrics {
+  // Null when the request included bots.
+  excludedBots: ExcludedBots | null;
   totalReviews: number;
   uniqueReviewers: number;
   avgReviewsPerPR: number;
@@ -94,6 +103,8 @@ export interface AnalyzeParams {
   since?: string;
   until?: string;
   teamMembers?: string[];
+  // Bots are excluded unless this is true.
+  includeBots?: boolean;
 }
 
 export interface AppDefaults {

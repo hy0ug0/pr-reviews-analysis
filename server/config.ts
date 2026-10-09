@@ -10,6 +10,8 @@ export interface Config {
   defaultRepos: string[];
   defaultLabel: string;
   defaultTeam: string[];
+  // Bots that use regular user accounts, which only a list can tell apart from people.
+  botLogins: string[];
   cacheDir: string;
   cacheTtlHours: number;
   prCacheTtlDays: number;
@@ -71,6 +73,7 @@ const envSchema = z
     DEFAULT_REPOS: repoListSetting,
     DEFAULT_LABEL: textSetting,
     DEFAULT_TEAM: listSetting,
+    BOT_LOGINS: listSetting,
     CACHE_DIR: textSetting,
     CACHE_TTL_HOURS: integerSetting("CACHE_TTL_HOURS", { min: 1, fallback: 6 }),
     PR_CACHE_TTL_DAYS: integerSetting("PR_CACHE_TTL_DAYS", { min: 1, fallback: 30 }),
@@ -86,6 +89,7 @@ const envSchema = z
     defaultRepos: env.DEFAULT_REPOS,
     defaultLabel: env.DEFAULT_LABEL,
     defaultTeam: env.DEFAULT_TEAM,
+    botLogins: env.BOT_LOGINS,
     cacheDir: env.CACHE_DIR || ".cache/pr-reviews-analysis",
     cacheTtlHours: env.CACHE_TTL_HOURS,
     prCacheTtlDays: env.PR_CACHE_TTL_DAYS,

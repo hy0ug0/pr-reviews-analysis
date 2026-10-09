@@ -32,7 +32,7 @@ function rawNode(overrides: Record<string, unknown> = {}): Record<string, unknow
     mergedAt: "2026-03-05T09:00:00Z",
     closedAt: "2026-03-05T09:00:00Z",
     isDraft: false,
-    author: { login: "erin" },
+    author: { login: "erin", __typename: "User" },
     timelineItems: { nodes: [] },
     reviews: { pageInfo: { hasNextPage: false, endCursor: "cursor-1" }, nodes: [review] },
     comments,
@@ -70,6 +70,15 @@ describe("pullRequestNodeSchema", () => {
 
     expect(node.author).toBeNull();
     expect(node.reviews.nodes).toEqual([{ author: null, state: "PENDING", submittedAt: null }]);
+  });
+
+  test("keeps the PR author's __typename, so bot PRs can be told apart", () => {
+    const author = { login: "renovate", __typename: "Bot" };
+
+    expect(parseNode({ author }).author).toEqual(author);
+    expect(pullRequestNodeSchema.safeParse(rawNode({ author: { login: "erin" } })).success).toBe(
+      false,
+    );
   });
 
   test("drops null connection items", () => {

@@ -5,25 +5,41 @@ import type {
   ReviewerStats,
 } from "../../shared/types.ts";
 import { summarizeFirstResponse } from "./first-response.ts";
-import { isParticipant, toParticipantRules } from "./participants.ts";
+import {
+  isExcludedBotPR,
+  isParticipant,
+  toParticipantRules,
+  type ParticipantOptions,
+} from "./participants.ts";
 
-export function analyze(prs: PullRequest[], params: AnalyzeParams): AnalysisMetrics {
+// The request parameters plus the server settings the analysis applies.
+export type AnalyzeOptions = AnalyzeParams & Pick<ParticipantOptions, "botLogins">;
+
+export function analyze(loadedPRs: PullRequest[], options: AnalyzeOptions): AnalysisMetrics {
   const reviewerMap = new Map<string, ReviewerStats>();
-  const rules = toParticipantRules(params);
+  const rules = toParticipantRules(options);
+  // Dropped before any metric, so bot PRs count toward no total, average or response time.
+  const prs = loadedPRs.filter((pr) => !isExcludedBotPR(pr, rules));
+  // With bots excluded, a review these rules accept was skipped only for being by a bot.
+  const rulesWithBots = rules.includeBots ? null : { ...rules, includeBots: true };
 
   let totalReviews = 0;
-  const sinceISO = params.since || "";
-  const untilISO = params.until ? params.until + "T23:59:59Z" : "";
+  let excludedBotReviews = 0;
+  const sinceISO = options.since || "";
+  const untilISO = options.until ? options.until + "T23:59:59Z" : "";
 
   for (const pr of prs) {
     const reviewedBy = new Set<string>();
 
     for (const review of pr.reviews.nodes) {
-      if (!isParticipant(review.author, pr, rules)) continue;
-      const reviewer = review.author.login;
       if (review.state === "DISMISSED" || review.state === "PENDING") continue;
       if (sinceISO && review.submittedAt && review.submittedAt < sinceISO) continue;
       if (untilISO && review.submittedAt && review.submittedAt > untilISO) continue;
+      if (!isParticipant(review.author, pr, rules)) {
+        if (rulesWithBots && isParticipant(review.author, pr, rulesWithBots)) excludedBotReviews++;
+        continue;
+      }
+      const reviewer = review.author.login;
 
       if (!reviewerMap.has(reviewer)) {
         reviewerMap.set(reviewer, {
@@ -65,19 +81,24 @@ export function analyze(prs: PullRequest[], params: AnalyzeParams): AnalysisMetr
   );
 
   return {
+    excludedBots: rulesWithBots
+      ? { prs: loadedPRs.length - prs.length, reviews: excludedBotReviews }
+      : null,
     totalReviews,
     uniqueReviewers: reviewerStats.length,
     avgReviewsPerPR: prs.length > 0 ? Math.round((totalReviews / prs.length) * 10) / 10 : 0,
     reviewerStats,
     firstResponse: summarizeFirstResponse({
       prs,
-      teamMembers: params.teamMembers,
-      since: params.since,
-      until: params.until,
+      teamMembers: options.teamMembers,
+      includeBots: options.includeBots,
+      botLogins: options.botLogins,
+      since: options.since,
+      until: options.until,
     }),
     timeRange: {
-      since: params.since || "",
-      until: params.until || "",
+      since: options.since || "",
+      until: options.until || "",
     },
   };
 }

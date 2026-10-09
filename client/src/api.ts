@@ -125,6 +125,7 @@ export async function fetchAnalysis(values: AnalyzeFormValues): Promise<Analysis
   if (values.label) params.set("label", values.label);
   if (values.team) params.set("team", values.team);
   if (values.skipCache) params.set("skipCache", "1");
+  if (values.includeBots) params.set("includeBots", "1");
 
   if (values.timeRange === "custom") {
     if (values.since) params.set("since", values.since);

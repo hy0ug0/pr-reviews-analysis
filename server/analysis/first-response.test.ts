@@ -12,7 +12,7 @@ import {
   summarizeFirstResponse,
   type FirstResponseOutcome,
 } from "./first-response.ts";
-import { toTeamFilter } from "./participants.ts";
+import { toParticipantRules } from "./participants.ts";
 import { percentile, weekStart } from "./stats.ts";
 
 const HOUR = 60 * 60 * 1000;
@@ -89,14 +89,14 @@ function makePR({
     closedAt,
     isDraft,
     readyForReviewAt,
-    author: { login: author },
+    author: { login: author, __typename: "User" },
     reviews: { nodes: reviews },
     comments: { pageInfo: { hasNextPage: moreComments }, nodes: comments },
   };
 }
 
 function classify(pr: PullRequest, teamMembers?: string[]): FirstResponseOutcome {
-  return classifyFirstResponse({ pr, team: toTeamFilter(teamMembers) });
+  return classifyFirstResponse({ pr, ...toParticipantRules({ teamMembers }) });
 }
 
 function respondedAfter(outcome: FirstResponseOutcome): number | null {
@@ -188,6 +188,31 @@ describe("classifyFirstResponse", () => {
     );
 
     expect(respondedAfter(outcome)).toBe(3 * HOUR);
+  });
+
+  test("counts bots as responders when bots are included", () => {
+    const outcome = classifyFirstResponse({
+      pr: makePR({
+        comments: [comment({ by: "renovate[bot]", createdAt: "2026-03-02T09:02:00Z" })],
+      }),
+      ...toParticipantRules({ includeBots: true }),
+    });
+
+    expect(respondedAfter(outcome)).toBe(2 * 60 * 1000);
+  });
+
+  test("ignores users on the configured bot list", () => {
+    const outcome = classifyFirstResponse({
+      pr: makePR({
+        comments: [
+          comment({ by: "CI-User", createdAt: "2026-03-02T09:02:00Z" }),
+          comment({ by: "bob", createdAt: "2026-03-02T10:00:00Z" }),
+        ],
+      }),
+      ...toParticipantRules({ botLogins: ["ci-user"] }),
+    });
+
+    expect(respondedAfter(outcome)).toBe(HOUR);
   });
 
   test("ignores reviews and comments whose author GitHub can't resolve", () => {
