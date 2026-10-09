@@ -4,6 +4,7 @@ import { fetchAnalysis, fetchDefaults } from "./api";
 import { Header } from "./components/Header";
 import { AnalyzeForm } from "./components/AnalyzeForm";
 import { SummaryCards } from "./components/SummaryCards";
+import { DataSourceNote } from "./components/DataSourceNote";
 import { ReviewsChart } from "./components/ReviewsChart";
 import { TypesChart } from "./components/TypesChart";
 import { ReviewerTable } from "./components/ReviewerTable";
@@ -135,7 +136,10 @@ export default function App() {
               </div>
             )}
 
-            <SummaryCards data={result} />
+            <div className="space-y-2">
+              <SummaryCards data={result} />
+              {result.dataSource && <DataSourceNote dataSource={result.dataSource} />}
+            </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-2 bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-gray-200 dark:border-slate-800 p-6">

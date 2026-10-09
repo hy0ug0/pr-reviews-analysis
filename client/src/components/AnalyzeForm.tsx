@@ -435,14 +435,19 @@ export function AnalyzeForm({ onSubmit, loading, defaults }: AnalyzeFormProps) {
         )}
 
         <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-slate-300 cursor-pointer select-none">
+          <label className="inline-flex items-start gap-2 text-sm text-gray-700 dark:text-slate-300 cursor-pointer select-none">
             <input
               type="checkbox"
               checked={form.skipCache}
               onChange={(e) => update("skipCache", e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800"
+              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800"
             />
-            Skip cache (force refresh)
+            <span>
+              Refresh from GitHub
+              <span className="block text-xs text-gray-400 dark:text-slate-500">
+                Lists PRs again; only PRs updated since they were cached are refetched
+              </span>
+            </span>
           </label>
           <button
             type="submit"
