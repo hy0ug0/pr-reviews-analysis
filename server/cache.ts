@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import type { z } from "zod";
+import { createLogger } from "./logger.ts";
+
+const log = createLogger("cache");
 
 const DEFAULT_CACHE_TTL_HOURS = 6;
 const DEFAULT_CACHE_DIR = resolve(process.cwd(), ".cache", "pr-reviews-analysis");
@@ -15,7 +19,7 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function isCacheRecord<T>(value: unknown): value is CacheRecord<T> {
+function isCacheRecord(value: unknown): value is CacheRecord<unknown> {
   if (!isObjectRecord(value)) return false;
   return (
     typeof value.cachedAt === "string" &&
@@ -44,37 +48,47 @@ function getCacheFilePath(key: string): string {
   return join(CACHE_DIR, `${key}.json`);
 }
 
-export function buildCacheKey(value: unknown): string {
-  const serialized = JSON.stringify(value);
-  return createHash("sha256").update(serialized).digest("hex");
+// The namespace is part of both the hash input and the file name, so entries from
+// another namespace (or written before namespaces existed) never match a key.
+export function buildCacheKey(namespace: string, value: unknown): string {
+  const serialized = JSON.stringify({ namespace, value });
+  const hash = createHash("sha256").update(serialized).digest("hex");
+  return `${namespace}-${hash}`;
 }
 
-export async function readCache<T>(key: string): Promise<T | null> {
+export async function readCache<T>(key: string, schema: z.ZodType<T>): Promise<T | null> {
   const path = getCacheFilePath(key);
 
   try {
     const raw = await readFile(path, "utf8");
     const parsedRaw: unknown = JSON.parse(raw);
-    if (!isCacheRecord<T>(parsedRaw)) {
+    if (!isCacheRecord(parsedRaw)) {
+      log.warn(`Discarding malformed cache entry ${key}`);
       await rm(path, { force: true });
       return null;
     }
 
-    const parsed = parsedRaw;
-
-    const expiresAt = Date.parse(parsed.expiresAt);
+    const expiresAt = Date.parse(parsedRaw.expiresAt);
     if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
       await rm(path, { force: true });
       return null;
     }
 
-    return parsed.value;
+    const value = schema.safeParse(parsedRaw.value);
+    if (!value.success) {
+      log.warn(`Discarding cache entry ${key} that does not match the expected shape`);
+      await rm(path, { force: true });
+      return null;
+    }
+
+    return value.data;
   } catch (error: unknown) {
     const code = isObjectRecord(error) ? error.code : undefined;
     if (code === "ENOENT") {
       return null;
     }
 
+    log.warn(`Discarding unreadable cache entry ${key}`);
     await rm(path, { force: true }).catch(() => {
       // Ignore cleanup errors for broken cache files.
     });
