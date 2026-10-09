@@ -1,28 +1,26 @@
 import type {
   PullRequest,
   AnalyzeParams,
-  AnalysisResult,
+  AnalysisMetrics,
   ReviewerStats,
 } from "../../shared/types.ts";
-import { summarizeFirstResponse, toTeamFilter } from "./first-response.ts";
+import { summarizeFirstResponse } from "./first-response.ts";
+import { isParticipant, toParticipantRules } from "./participants.ts";
 
-export function analyze(prs: PullRequest[], params: AnalyzeParams): AnalysisResult {
+export function analyze(prs: PullRequest[], params: AnalyzeParams): AnalysisMetrics {
   const reviewerMap = new Map<string, ReviewerStats>();
-  const teamSet = toTeamFilter(params.teamMembers);
+  const rules = toParticipantRules(params);
 
   let totalReviews = 0;
   const sinceISO = params.since || "";
   const untilISO = params.until ? params.until + "T23:59:59Z" : "";
 
   for (const pr of prs) {
-    const prAuthor = pr.author?.login;
     const reviewedBy = new Set<string>();
 
     for (const review of pr.reviews.nodes) {
-      const reviewer = review.author?.login;
-      if (!reviewer) continue;
-      if (reviewer === prAuthor) continue;
-      if (teamSet && !teamSet.has(reviewer.toLowerCase())) continue;
+      if (!isParticipant(review.author, pr, rules)) continue;
+      const reviewer = review.author.login;
       if (review.state === "DISMISSED" || review.state === "PENDING") continue;
       if (sinceISO && review.submittedAt && review.submittedAt < sinceISO) continue;
       if (untilISO && review.submittedAt && review.submittedAt > untilISO) continue;
@@ -67,10 +65,6 @@ export function analyze(prs: PullRequest[], params: AnalyzeParams): AnalysisResu
   );
 
   return {
-    matchingPRs: prs.length,
-    analyzedPRs: prs.length,
-    isComplete: true,
-    partialReasons: [],
     totalReviews,
     uniqueReviewers: reviewerStats.length,
     avgReviewsPerPR: prs.length > 0 ? Math.round((totalReviews / prs.length) * 10) / 10 : 0,

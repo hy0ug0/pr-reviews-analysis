@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type {
-  AnalysisResult,
+  AnalysisMetrics,
   AnalyzeParams,
   PRReview,
   PullRequest,
@@ -12,15 +12,17 @@ const REPO = "acme/widgets";
 
 function makeReview({
   by,
+  type = "User",
   state = "APPROVED",
   submittedAt = "2026-03-15T12:00:00Z",
 }: {
   by: string | null;
+  type?: string;
   state?: ReviewState;
   submittedAt?: string | null;
 }): PRReview {
   return {
-    author: by === null ? null : { login: by, __typename: "User" },
+    author: by === null ? null : { login: by, __typename: type },
     state,
     submittedAt,
   };
@@ -53,11 +55,11 @@ function makePR({
   };
 }
 
-function run(prs: PullRequest[], params: Partial<AnalyzeParams> = {}): AnalysisResult {
+function run(prs: PullRequest[], params: Partial<AnalyzeParams> = {}): AnalysisMetrics {
   return analyze(prs, { repos: [REPO], ...params });
 }
 
-function logins(result: AnalysisResult): string[] {
+function logins(result: AnalysisMetrics): string[] {
   return result.reviewerStats.map((stats) => stats.login);
 }
 
@@ -71,11 +73,30 @@ describe("review filtering", () => {
     expect(logins(result)).toEqual(["bob"]);
   });
 
-  test("ignores reviews by the PR author", () => {
+  test("ignores reviews by the PR author, whatever the casing", () => {
     const result = run([
       makePR({
         author: "alice",
-        reviews: [makeReview({ by: "alice" }), makeReview({ by: "bob" })],
+        reviews: [
+          makeReview({ by: "alice" }),
+          makeReview({ by: "Alice" }),
+          makeReview({ by: "bob" }),
+        ],
+      }),
+    ]);
+
+    expect(result.totalReviews).toBe(1);
+    expect(logins(result)).toEqual(["bob"]);
+  });
+
+  test("ignores bots by __typename and by the [bot] login suffix", () => {
+    const result = run([
+      makePR({
+        reviews: [
+          makeReview({ by: "copilot-pull-request-reviewer", type: "Bot" }),
+          makeReview({ by: "renovate[bot]" }),
+          makeReview({ by: "bob" }),
+        ],
       }),
     ]);
 
@@ -281,12 +302,8 @@ describe("aggregation", () => {
 });
 
 describe("output shape", () => {
-  test("returns zero counts for empty input", () => {
+  test("returns zero counts and no coverage fields for empty input", () => {
     expect(run([])).toEqual({
-      matchingPRs: 0,
-      analyzedPRs: 0,
-      isComplete: true,
-      partialReasons: [],
       totalReviews: 0,
       uniqueReviewers: 0,
       avgReviewsPerPR: 0,
@@ -305,18 +322,22 @@ describe("output shape", () => {
   test("timeRange uses empty strings when since and until are omitted", () => {
     expect(run([]).timeRange).toEqual({ since: "", until: "" });
   });
+});
 
-  test("reports every input PR as matched and analyzed, with a complete result", () => {
+describe("participants shared with first response", () => {
+  test("a bot review counts in neither reviewer stats nor first response", () => {
     const result = run([
-      makePR({ number: 1, reviews: [makeReview({ by: "bob" })] }),
-      makePR({ number: 2 }),
+      makePR({ reviews: [makeReview({ by: "copilot-pull-request-reviewer", type: "Bot" })] }),
     ]);
 
-    expect(result).toMatchObject({
-      matchingPRs: 2,
-      analyzedPRs: 2,
-      isComplete: true,
-      partialReasons: [],
-    });
+    expect(result.reviewerStats).toEqual([]);
+    expect(result.firstResponse).toMatchObject({ respondedPRs: 0, closedWithoutResponsePRs: 1 });
+  });
+
+  test("the author reviewing their own PR under another casing counts in neither", () => {
+    const result = run([makePR({ author: "alice", reviews: [makeReview({ by: "ALICE" })] })]);
+
+    expect(result.reviewerStats).toEqual([]);
+    expect(result.firstResponse).toMatchObject({ respondedPRs: 0, closedWithoutResponsePRs: 1 });
   });
 });
