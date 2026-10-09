@@ -12,6 +12,6 @@
     "allowImportingTsExtensions": true,
     "types": ["node", "bun"]
   },
-  "include": ["**/*", "../shared/**/*"],
+  "include": ["**/*", "../shared/**/*", "../client/src/**/*.test.ts"],
   "exclude": ["node_modules"]
 }

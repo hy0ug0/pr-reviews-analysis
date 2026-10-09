@@ -98,6 +98,14 @@ export interface DataSource {
   listedAt: string;
   fetchedPRs: number;
   reusedPRs: number;
+  // When the oldest reused PR was cached; null when no PR was reused.
+  oldestReusedCachedAt: string | null;
+  // GraphQL calls this run made, retries included. 0 when everything came from the cache.
+  githubRequests: number;
+  // Wall time spent listing and fetching on GitHub; null when the run made no request.
+  fetchDurationMs: number | null;
+  // The request asked to skip the cache, so the PR list was searched on GitHub again.
+  skippedCache: boolean;
 }
 
 export interface AnalyzeParams {

@@ -1,6 +1,7 @@
-import { execFile } from "node:child_process";
+import { execFile, type ExecFileException } from "node:child_process";
 import { GITHUB_EPOCH_DATE, todayUtc } from "../shared/schemas.ts";
 import type { AppSuggestion } from "../shared/types.ts";
+import type { GitHubRun } from "./github-run.ts";
 import { uniqueReasons } from "./lib/partial-reasons.ts";
 import { createLogger } from "./logger.ts";
 import {
@@ -259,13 +260,25 @@ function buildGraphqlArgs(query: string, variables: Record<string, GraphqlVariab
   return args;
 }
 
-function ghGraphql<T>(query: string, variables: Record<string, GraphqlVariable> = {}): Promise<T> {
+type GhCallback = (error: ExecFileException | null, stdout: string, stderr: string) => void;
+
+// Every gh call goes through here, so a run counts each one, retries and failures included.
+function spawnGh(args: string[], run: GitHubRun | undefined, callback: GhCallback) {
+  if (run) run.requests++;
+  execFile("gh", args, { maxBuffer: 10 * 1024 * 1024 }, callback);
+}
+
+function ghGraphql<T>(
+  query: string,
+  variables: Record<string, GraphqlVariable> = {},
+  run?: GitHubRun,
+): Promise<T> {
   return new Promise((resolve, reject) => {
     const args = buildGraphqlArgs(query, variables);
 
-    execFile("gh", args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+    spawnGh(args, run, (err, stdout, stderr) => {
       if (err) {
-        const message = String(stderr || err.message);
+        const message = stderr || err.message;
         if (err.code === "ENOENT") {
           reject(new Error(GH_NOT_FOUND_MESSAGE));
         } else {
@@ -275,7 +288,7 @@ function ghGraphql<T>(query: string, variables: Record<string, GraphqlVariable> 
       }
 
       try {
-        const response: GraphqlResponse<T> = JSON.parse(String(stdout));
+        const response: GraphqlResponse<T> = JSON.parse(stdout);
         if (response.errors?.length) {
           reject(new Error(response.errors.map((e) => e.message).join(", ")));
           return;
@@ -293,12 +306,13 @@ function ghGraphql<T>(query: string, variables: Record<string, GraphqlVariable> 
 // there is no data at all.
 function ghGraphqlPartial<T>(
   query: string,
-  variables: Record<string, GraphqlVariable> = {},
+  variables: Record<string, GraphqlVariable>,
+  run: GitHubRun,
 ): Promise<{ data: T | null; errors?: GraphqlError[] }> {
   return new Promise((resolve, reject) => {
     const args = buildGraphqlArgs(query, variables);
 
-    execFile("gh", args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+    spawnGh(args, run, (err, stdout, stderr) => {
       if (err?.code === "ENOENT") {
         reject(new Error(GH_NOT_FOUND_MESSAGE));
         return;
@@ -306,7 +320,7 @@ function ghGraphqlPartial<T>(
 
       let response: GraphqlResponse<T | null> | null = null;
       try {
-        response = JSON.parse(String(stdout));
+        response = JSON.parse(stdout);
       } catch {
         // Handled below with gh's own error message.
       }
@@ -317,7 +331,7 @@ function ghGraphqlPartial<T>(
       const messages = response?.errors?.map((e) => e.message).join(", ");
       reject(
         new Error(
-          messages || (err ? String(stderr || err.message) : "Failed to parse GitHub API response"),
+          messages || (err ? stderr || err.message : "Failed to parse GitHub API response"),
         ),
       );
     });
@@ -351,8 +365,9 @@ async function withGraphqlRetry<T>(run: () => Promise<T>): Promise<T> {
 function ghGraphqlWithRetry<T>(
   query: string,
   variables: Record<string, GraphqlVariable> = {},
+  run?: GitHubRun,
 ): Promise<T> {
-  return withGraphqlRetry(() => ghGraphql<T>(query, variables));
+  return withGraphqlRetry(() => ghGraphql<T>(query, variables, run));
 }
 
 function delay(ms: number): Promise<void> {
@@ -581,15 +596,17 @@ async function listWindowPullRequests(
   repo: string,
   label: string | undefined,
   window: DateWindow,
+  run: GitHubRun,
 ): Promise<ListWindowResult> {
   log.info(
     `Listing PRs for ${repo} in window ${window.since}..${window.until}${label ? ` [label:${label}]` : ""}`,
   );
   const searchQuery = buildSearchQuery(repo, label, window.since, window.until);
-  const firstPage = await ghGraphqlWithRetry<ListingResponse>(PR_LISTING_QUERY, {
-    searchQuery,
-    first: SEARCH_PAGE_SIZE,
-  });
+  const firstPage = await ghGraphqlWithRetry<ListingResponse>(
+    PR_LISTING_QUERY,
+    { searchQuery, first: SEARCH_PAGE_SIZE },
+    run,
+  );
   const issueCount = firstPage.search.issueCount;
   const partialReasons: string[] = [];
   let isComplete = true;
@@ -626,7 +643,7 @@ async function listWindowPullRequests(
 
     const variables: Record<string, GraphqlVariable> = { searchQuery, first: SEARCH_PAGE_SIZE };
     if (cursor) variables.after = cursor;
-    const page = await ghGraphqlWithRetry<ListingResponse>(PR_LISTING_QUERY, variables);
+    const page = await ghGraphqlWithRetry<ListingResponse>(PR_LISTING_QUERY, variables, run);
 
     prs.push(...page.search.nodes);
     hasNextPage = page.search.pageInfo.hasNextPage;
@@ -645,6 +662,7 @@ async function listRepoPullRequests(
   repo: string,
   label: string | undefined,
   range: DateWindow,
+  run: GitHubRun,
 ): Promise<PullRequestListing> {
   log.info(`Starting repo listing for ${repo} in range ${range.since}..${range.until}`);
   const windowsToList: DateWindow[] = [{ ...range }];
@@ -656,7 +674,7 @@ async function listRepoPullRequests(
 
   while (windowsToList.length > 0) {
     const window = windowsToList.pop()!;
-    const windowResult = await listWindowPullRequests(repo, label, window);
+    const windowResult = await listWindowPullRequests(repo, label, window, run);
 
     if (windowResult.kind === "split") {
       const [left, right] = windowResult.halves;
@@ -687,7 +705,8 @@ async function listRepoPullRequests(
 async function fetchPullRequestReviews(
   repo: string,
   number: number,
-  after: string | null = null,
+  after: string | null,
+  run: GitHubRun,
 ): Promise<PRReview[]> {
   const { owner, name } = parseRepo(repo);
   let hasNextPage = true;
@@ -703,7 +722,7 @@ async function fetchPullRequestReviews(
     };
     if (cursor !== null) variables.after = cursor;
 
-    const data = await ghGraphqlWithRetry<ReviewsResponse>(PR_REVIEWS_QUERY, variables);
+    const data = await ghGraphqlWithRetry<ReviewsResponse>(PR_REVIEWS_QUERY, variables, run);
     const pullRequest = data.repository?.pullRequest;
     if (!pullRequest) {
       throw new Error(`Pull request ${repo}#${number} was not found while fetching reviews.`);
@@ -723,12 +742,17 @@ async function fetchPullRequestReviews(
   return reviews;
 }
 
-async function fetchPullRequestBatch(repo: string, numbers: number[]): Promise<BatchEntry[]> {
+async function fetchPullRequestBatch(
+  repo: string,
+  numbers: number[],
+  run: GitHubRun,
+): Promise<BatchEntry[]> {
   const { owner, name } = parseRepo(repo);
   const response = await withGraphqlRetry(() =>
     ghGraphqlPartial<NonNullable<PullRequestBatchResponse["data"]>>(
       buildPullRequestBatchQuery(numbers),
       { owner, name },
+      run,
     ),
   );
   return readPullRequestBatch({ repo, numbers, response });
@@ -736,17 +760,20 @@ async function fetchPullRequestBatch(repo: string, numbers: number[]): Promise<B
 
 // Lists the PRs created in the range. Oversized windows are split to get past the
 // 1000-result Search limit. Repos are expected normalized (see normalizeRepos).
-export async function listPullRequests({
-  repos,
-  label,
-  since,
-  until,
-}: {
-  repos: string[];
-  label?: string;
-  since?: string;
-  until?: string;
-}): Promise<PullRequestListing> {
+export async function listPullRequests(
+  {
+    repos,
+    label,
+    since,
+    until,
+  }: {
+    repos: string[];
+    label?: string;
+    since?: string;
+    until?: string;
+  },
+  run: GitHubRun,
+): Promise<PullRequestListing> {
   const dateRange = normalizeDateRange(since, until);
   log.info(
     `Starting listing across ${repos.length} repos in range ${dateRange.since}..${dateRange.until}${label ? ` [label:${label}]` : ""}`,
@@ -757,7 +784,7 @@ export async function listPullRequests({
   let isComplete = true;
 
   for (const repo of repos) {
-    const repoListing = await listRepoPullRequests(repo, label, dateRange);
+    const repoListing = await listRepoPullRequests(repo, label, dateRange, run);
     prs.push(...repoListing.prs);
     matchingPRs += repoListing.matchingPRs;
     if (!repoListing.isComplete) isComplete = false;
@@ -771,6 +798,7 @@ export async function listPullRequests({
 // pullRequestKey and has one entry per requested PR.
 export async function fetchPullRequestDetails(
   refs: PullRequestRef[],
+  run: GitHubRun,
 ): Promise<Map<string, FetchedPullRequest>> {
   const numbersByRepo = new Map<string, number[]>();
   for (const { repo, number } of refs) {
@@ -786,9 +814,9 @@ export async function fetchPullRequestDetails(
       numbers,
       batchSize: PR_BATCH_SIZE,
       concurrency: FETCH_CONCURRENCY,
-      fetchBatch: (batch) => fetchPullRequestBatch(repo, batch),
+      fetchBatch: (batch) => fetchPullRequestBatch(repo, batch, run),
       fetchContinuation: (pr) =>
-        fetchPullRequestReviews(repo, pr.number, pr.reviews.pageInfo.endCursor),
+        fetchPullRequestReviews(repo, pr.number, pr.reviews.pageInfo.endCursor, run),
     });
     numbers.forEach((number, index) => {
       fetched.set(pullRequestKey({ repo, number }), results[index]);

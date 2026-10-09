@@ -149,6 +149,10 @@ export const dataSourceSchema = z.object({
   listedAt: z.string(),
   fetchedPRs: z.number(),
   reusedPRs: z.number(),
+  oldestReusedCachedAt: z.string().nullable(),
+  githubRequests: z.number(),
+  fetchDurationMs: z.number().nullable(),
+  skippedCache: z.boolean(),
 });
 
 export const analysisResultSchema = z.object({

@@ -1,7 +1,7 @@
-import { useState, useEffect, useSyncExternalStore } from "react";
-import type { AnalysisResult, AnalyzeFormValues, AppDefaults } from "./types";
+import { useEffect, useReducer, useState, useSyncExternalStore } from "react";
+import type { AnalyzeFormValues, AppDefaults } from "./types";
+import { analysisReducer, initialAnalysisState } from "./analysisState";
 import { fetchAnalysis, fetchDefaults } from "./api";
-import { parseList } from "../../shared/schemas";
 import { Header } from "./components/Header";
 import { AnalyzeForm } from "./components/AnalyzeForm";
 import { SummaryCards } from "./components/SummaryCards";
@@ -28,11 +28,8 @@ function useDarkMode() {
 
 export default function App() {
   const isDark = useDarkMode();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<AnalysisResult | null>(null);
-  // The team list the shown result was computed with, not the form's current value.
-  const [resultTeam, setResultTeam] = useState<string[]>([]);
+  const [{ shown, loading, error }, dispatch] = useReducer(analysisReducer, initialAnalysisState);
+  const result = shown?.result ?? null;
   const [defaults, setDefaults] = useState<AppDefaults | undefined>(undefined);
 
   useEffect(() => {
@@ -48,17 +45,19 @@ export default function App() {
   }, []);
 
   const handleAnalyze = async (values: AnalyzeFormValues) => {
-    setLoading(true);
-    setError(null);
+    dispatch({ kind: "started" });
     try {
-      const data = await fetchAnalysis(values);
-      setResult(data);
-      setResultTeam(parseList(values.team));
+      dispatch({ kind: "succeeded", values, result: await fetchAnalysis(values) });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
-    } finally {
-      setLoading(false);
+      const message = err instanceof Error ? err.message : "An error occurred";
+      dispatch({ kind: "failed", message });
     }
+  };
+
+  // Reruns the shown analysis without the cache. The form, and its "Refresh from GitHub"
+  // checkbox, stay as they are.
+  const handleRefresh = () => {
+    if (shown) void handleAnalyze({ ...shown.values, skipCache: true });
   };
 
   const showTruncatedWarning = result && !result.isComplete;
@@ -119,7 +118,7 @@ export default function App() {
           </div>
         )}
 
-        {result && !loading && (
+        {shown && result && !loading && (
           <div className="space-y-8">
             {showTruncatedWarning && (
               <div className="bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-900 rounded-xl p-4">
@@ -142,15 +141,22 @@ export default function App() {
               </div>
             )}
 
-            <div className="space-y-2">
+            <div className="space-y-3">
+              {result.dataSource && (
+                <DataSourceNote
+                  dataSource={result.dataSource}
+                  matchingPRs={result.matchingPRs}
+                  loading={loading}
+                  onRefresh={handleRefresh}
+                />
+              )}
               <SummaryCards data={result} />
               {result.excludedBots && <ExcludedBotsNote excludedBots={result.excludedBots} />}
-              {result.dataSource && <DataSourceNote dataSource={result.dataSource} />}
             </div>
 
             <FirstResponseSection
               summary={result.firstResponse}
-              teamMembers={resultTeam}
+              teamMembers={shown.team}
               includeBots={result.excludedBots === null}
               isDark={isDark}
             />

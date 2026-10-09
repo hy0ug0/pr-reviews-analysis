@@ -36,6 +36,26 @@ export function formatLongDate(dateOnly: string): string {
   });
 }
 
+// "just now", "5 min ago", "2 h ago", "3 d ago": how long ago something was cached or listed.
+export function formatTimeAgo(elapsedMs: number): string {
+  const minutes = Math.floor(elapsedMs / MINUTE_MS);
+  if (!Number.isFinite(minutes) || minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return `${Math.floor(hours / 24)} d ago`;
+}
+
+// "0.4 s", "14 s", "2 min 5 s": how long a GitHub fetch took. Tenths only under ten
+// seconds, where they still mean something.
+export function formatFetchTime(ms: number): string {
+  if (ms < 10_000) return `${Number((ms / 1000).toFixed(1))} s`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds} s`;
+  const rest = seconds % 60;
+  return rest === 0 ? `${seconds / 60} min` : `${Math.floor(seconds / 60)} min ${rest} s`;
+}
+
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
   return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
 }
