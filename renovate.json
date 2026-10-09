@@ -7,7 +7,6 @@
   "rebaseWhen": "conflicted",
   "prHourlyLimit": 0,
   "prConcurrentLimit": 10,
-  "ignoreTests": true,
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": ["before 5am on monday"],

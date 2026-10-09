@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - main
+      # Renovate branch automerge pushes renovate/* branches without a PR.
+      # Renovate only merges a branch once its checks pass, so CI must run there.
+      - "renovate/**"
 
 permissions:
   contents: read
