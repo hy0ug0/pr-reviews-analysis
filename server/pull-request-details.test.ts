@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { PRReview } from "../shared/types.ts";
 import {
   batchAlias,
   fetchPullRequestsInBatches,
@@ -9,7 +8,8 @@ import {
   type FetchPullRequestBatch,
   type PullRequestBatchResponse,
 } from "./pull-request-details.ts";
-import type { FetchReviewContinuation, PullRequestNode } from "./review-pages.ts";
+import type { PRReview, PullRequestNode } from "./pull-request-model.ts";
+import type { FetchReviewContinuation } from "./review-pages.ts";
 
 const REPO = "acme/widgets";
 
@@ -18,7 +18,6 @@ function makeReview(by: string): PRReview {
     author: { login: by, __typename: "User" },
     state: "APPROVED",
     submittedAt: "2026-03-02T10:00:00Z",
-    body: "",
   };
 }
 
@@ -51,7 +50,7 @@ const noContinuation: FetchReviewContinuation = async () => {
 // and a NOT_FOUND error with the alias in its path for every other number.
 function makeBatchResponse(numbers: number[], nodes: PullRequestNode[]): PullRequestBatchResponse {
   const byNumber = new Map(nodes.map((node) => [node.number, node]));
-  const repository: Record<string, PullRequestNode | null> = {};
+  const repository: Record<string, unknown> = {};
   const errors: NonNullable<PullRequestBatchResponse["errors"]> = [];
   for (const number of numbers) {
     const node = byNumber.get(number) ?? null;
@@ -132,7 +131,12 @@ describe("fetchPullRequestsInBatches", () => {
     const { timelineItems: _timeline, ...node } = makeNode(1);
     expect(item).toEqual({
       kind: "complete",
-      pullRequest: { ...node, readyForReviewAt: null, reviews: { nodes: [makeReview("alice")] } },
+      pullRequest: {
+        repo: REPO,
+        ...node,
+        readyForReviewAt: null,
+        reviews: { nodes: [makeReview("alice")] },
+      },
     });
   });
 
@@ -165,6 +169,40 @@ describe("fetchPullRequestsInBatches", () => {
       },
       { kind: "failed", number: 3, reason: `Failed to fetch ${REPO}#3: rate limited` },
       { kind: "failed", number: 4, reason: `Failed to fetch ${REPO}#4: rate limited` },
+    ]);
+  });
+
+  test("fails a malformed node and completes the rest of its batch", async () => {
+    const result = await fetchPullRequestsInBatches({
+      repo: REPO,
+      numbers: [1, 2, 3],
+      batchSize: 50,
+      concurrency: 5,
+      fetchBatch: async (numbers) =>
+        readPullRequestBatch({
+          repo: REPO,
+          numbers,
+          response: {
+            data: {
+              repository: {
+                [batchAlias(1)]: makeNode(1),
+                [batchAlias(2)]: { ...makeNode(2), updatedAt: null },
+                [batchAlias(3)]: makeNode(3),
+              },
+            },
+          },
+        }),
+      fetchContinuation: noContinuation,
+    });
+
+    expect(result).toEqual([
+      { kind: "complete", pullRequest: expect.objectContaining({ repo: REPO, number: 1 }) },
+      {
+        kind: "failed",
+        number: 2,
+        reason: expect.stringContaining(`Failed to fetch ${REPO}#2: unexpected response`),
+      },
+      { kind: "complete", pullRequest: expect.objectContaining({ repo: REPO, number: 3 }) },
     ]);
   });
 
@@ -259,6 +297,37 @@ describe("readPullRequestBatch", () => {
     });
     expect(entries[0]).toEqual(found(makeNode(1)));
     expect(entries[49]).toEqual(found(makeNode(50)));
+  });
+
+  test("fails only the PR whose node does not match the schema", () => {
+    const { reviews: _reviews, ...withoutReviews } = makeNode(2);
+    const response: PullRequestBatchResponse = {
+      data: {
+        repository: {
+          [batchAlias(1)]: makeNode(1),
+          [batchAlias(2)]: withoutReviews,
+          [batchAlias(3)]: { ...makeNode(3), state: "DRAFT" },
+          [batchAlias(4)]: makeNode(4),
+        },
+      },
+    };
+
+    expect(readPullRequestBatch({ repo: REPO, numbers: [1, 2, 3, 4], response })).toEqual([
+      found(makeNode(1)),
+      {
+        kind: "failed",
+        reason: expect.stringMatching(
+          new RegExp(`^Failed to fetch ${REPO}#2: unexpected response \\(reviews: `),
+        ),
+      },
+      {
+        kind: "failed",
+        reason: expect.stringMatching(
+          new RegExp(`^Failed to fetch ${REPO}#3: unexpected response \\(state: `),
+        ),
+      },
+      found(makeNode(4)),
+    ]);
   });
 
   test("fails a PR whose alias has data but also an error under it", () => {

@@ -100,7 +100,13 @@ async function discardCacheEntry(key: string, reason: string): Promise<null> {
   return null;
 }
 
-export async function readCache<T>(key: string, schema: z.ZodType<T>): Promise<T | null> {
+// A valid cache entry and when it was written.
+export interface CacheHit<T> {
+  value: T;
+  cachedAt: string;
+}
+
+export async function readCache<T>(key: string, schema: z.ZodType<T>): Promise<CacheHit<T> | null> {
   let parsedRaw: unknown;
   try {
     parsedRaw = JSON.parse(await readFile(getCacheFilePath(key), "utf8"));
@@ -125,7 +131,7 @@ export async function readCache<T>(key: string, schema: z.ZodType<T>): Promise<T
     return discardCacheEntry(key, "value does not match the expected shape");
   }
 
-  return value.data;
+  return { value: value.data, cachedAt: parsedRaw.cachedAt };
 }
 
 export async function writeCache<T>(key: string, value: T, ttl: CacheTtl): Promise<void> {

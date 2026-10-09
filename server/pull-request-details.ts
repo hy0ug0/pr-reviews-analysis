@@ -1,11 +1,12 @@
-import type { PullRequest } from "../shared/types.ts";
+import { mapWithConcurrency } from "./lib/concurrency.ts";
 import { createLogger } from "./logger.ts";
 import {
-  mapWithConcurrency,
-  resolveReviews,
-  type FetchReviewContinuation,
+  describeSchemaError,
+  pullRequestNodeSchema,
+  type PullRequest,
   type PullRequestNode,
-} from "./review-pages.ts";
+} from "./pull-request-model.ts";
+import { resolveReviews, type FetchReviewContinuation } from "./review-pages.ts";
 
 const log = createLogger("fetch");
 
@@ -42,9 +43,10 @@ export interface GraphqlError {
 }
 
 // A batch query response, possibly partial: GitHub returns data for the aliases it could
-// resolve and an error, with the alias in its path, for each one it could not.
+// resolve and an error, with the alias in its path, for each one it could not. Each alias is
+// parsed with pullRequestNodeSchema before use.
 export interface PullRequestBatchResponse {
-  data: { repository: Record<string, PullRequestNode | null> | null } | null;
+  data: { repository: Record<string, unknown> | null } | null;
   errors?: GraphqlError[];
 }
 
@@ -53,7 +55,8 @@ export function batchAlias(number: number): string {
 }
 
 // Maps a batch response to one entry per number. An error under an alias fails only that
-// PR, even if the alias also has data, since that data may be incomplete.
+// PR, even if the alias also has data, since that data may be incomplete. So does a node
+// that does not match pullRequestNodeSchema.
 export function readPullRequestBatch({
   repo,
   numbers,
@@ -93,8 +96,15 @@ export function readPullRequestBatch({
         reason: `Failed to fetch ${repo}#${number}: ${aliasErrors.join(", ")}`,
       };
     }
-    const node = repository[alias];
-    if (node) return { kind: "node", node };
+    const raw = repository[alias];
+    if (raw !== null && raw !== undefined) {
+      const parsed = pullRequestNodeSchema.safeParse(raw);
+      if (parsed.success) return { kind: "node", node: parsed.data };
+      return {
+        kind: "failed",
+        reason: `Failed to fetch ${repo}#${number}: unexpected response (${describeSchemaError(parsed.error)})`,
+      };
+    }
     if (unattributed.length > 0) {
       return {
         kind: "failed",

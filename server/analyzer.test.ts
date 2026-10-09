@@ -23,7 +23,6 @@ function makeReview({
     author: by === null ? null : { login: by, __typename: "User" },
     state,
     submittedAt,
-    body: "",
   };
 }
 
@@ -37,6 +36,7 @@ function makePR({
   reviews?: PRReview[];
 }): PullRequest {
   return {
+    repo: REPO,
     number,
     title: `Widget change #${number}`,
     state: "MERGED",

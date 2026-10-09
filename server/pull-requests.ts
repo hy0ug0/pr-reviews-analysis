@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { DataSource, PullRequest } from "../shared/types.ts";
+import type { Equals } from "../shared/type-equals.ts";
+import type { DataSource } from "../shared/types.ts";
 import { buildCacheKey, readCache, shortCacheKey, writeCache } from "./cache.ts";
 import {
   fetchPullRequestDetails,
@@ -7,51 +8,25 @@ import {
   type ListedPullRequest,
   type PullRequestListing,
 } from "./github.ts";
+import { mapWithConcurrency } from "./lib/concurrency.ts";
+import { uniqueReasons } from "./lib/partial-reasons.ts";
 import { createLogger } from "./logger.ts";
 import { pullRequestKey, type PullRequestRef } from "./pull-request-details.ts";
-import { mapWithConcurrency, uniqueReasons } from "./review-pages.ts";
+import {
+  PULL_REQUEST_CACHE_VERSION,
+  pullRequestSchema,
+  type PullRequest,
+} from "./pull-request-model.ts";
 
 const log = createLogger("pull-requests");
 
-// Bump the version whenever PullRequest, PRReview, PRComment or CachedListing change
-// shape, so entries written in the old shape are never read. Version 1 cached whole fetch
-// results under "pull-requests-v1"; version 2 PRs had no draft, timeline or comment fields.
-const CACHE_VERSION = 3;
-const LISTING_NAMESPACE = `pull-request-listing-v${CACHE_VERSION}`;
-const PULL_REQUEST_NAMESPACE = `pull-request-v${CACHE_VERSION}`;
+// Bump whenever CachedListing changes shape, so listing entries written in the old shape are
+// never read. PR entries have their own version, PULL_REQUEST_CACHE_VERSION, so a PR shape
+// change keeps listings. Version 1 cached whole fetch results under "pull-requests-v1".
+const LISTING_CACHE_VERSION = 3;
+const LISTING_NAMESPACE = `pull-request-listing-v${LISTING_CACHE_VERSION}`;
+const PULL_REQUEST_NAMESPACE = `pull-request-v${PULL_REQUEST_CACHE_VERSION}`;
 const CACHE_IO_CONCURRENCY = 32;
-
-const prAuthorSchema = z.object({ login: z.string() }).nullable();
-const actorSchema = z.object({ login: z.string(), __typename: z.string() }).nullable();
-
-// The one schema for a PullRequest, used to validate PR cache entries.
-export const pullRequestSchema = z.object({
-  number: z.number(),
-  title: z.string(),
-  state: z.enum(["OPEN", "CLOSED", "MERGED"]),
-  url: z.string(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  mergedAt: z.string().nullable(),
-  closedAt: z.string().nullable(),
-  isDraft: z.boolean(),
-  readyForReviewAt: z.string().nullable(),
-  author: prAuthorSchema,
-  reviews: z.object({
-    nodes: z.array(
-      z.object({
-        author: actorSchema,
-        state: z.enum(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"]),
-        submittedAt: z.string().nullable(),
-        body: z.string(),
-      }),
-    ),
-  }),
-  comments: z.object({
-    pageInfo: z.object({ hasNextPage: z.boolean() }),
-    nodes: z.array(z.object({ author: actorSchema, createdAt: z.string() })),
-  }),
-});
 
 export const cachedListingSchema = z.object({
   listedAt: z.string(),
@@ -65,11 +40,7 @@ export interface CachedListing extends PullRequestListing {
   listedAt: string;
 }
 
-// Fails to compile when a schema and its type differ in any field, including optional ones
-// that zod would otherwise strip on read.
-type Equals<A, B> =
-  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-true satisfies Equals<z.infer<typeof pullRequestSchema>, PullRequest>;
+// Fails to compile when the schema and CachedListing differ in any field.
 true satisfies Equals<z.infer<typeof cachedListingSchema>, CachedListing>;
 
 export interface PullRequestQuery {
@@ -157,8 +128,8 @@ async function loadListing(
   } else {
     const cached = await readCache(cacheKey, cachedListingSchema);
     if (cached) {
-      log.info(`Listing cache hit for key ${shortKey} (listed at ${cached.listedAt})`);
-      return { listing: cached, source: "cache" };
+      log.info(`Listing cache hit for key ${shortKey} (listed at ${cached.value.listedAt})`);
+      return { listing: cached.value, source: "cache" };
     }
     log.info(`Listing cache miss for key ${shortKey}`);
   }
@@ -242,7 +213,7 @@ async function loadPullRequestsNow(
     async (listed): Promise<PullRequestCacheLookup> =>
       classifyCachedPullRequest(
         listed,
-        await readCache(buildPullRequestCacheKey(listed), pullRequestSchema),
+        (await readCache(buildPullRequestCacheKey(listed), pullRequestSchema))?.value ?? null,
       ),
   );
 

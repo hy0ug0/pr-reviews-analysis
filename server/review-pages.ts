@@ -1,24 +1,14 @@
-import type { PRReview, PullRequest } from "../shared/types.ts";
 import { createLogger } from "./logger.ts";
+import { mapWithConcurrency } from "./lib/concurrency.ts";
+import {
+  toPullRequest,
+  type PRReview,
+  type PullRequest,
+  type PullRequestNode,
+  type ReviewConnection,
+} from "./pull-request-model.ts";
 
 const log = createLogger("fetch");
-
-export interface PageInfo {
-  hasNextPage: boolean;
-  endCursor: string | null;
-}
-
-export interface ReviewConnection {
-  pageInfo: PageInfo;
-  nodes: PRReview[];
-}
-
-// A PR node selected with the PullRequestFields fragment, carrying the first page of its
-// reviews and its first ready-for-review event, if any.
-export interface PullRequestNode extends Omit<PullRequest, "reviews" | "readyForReviewAt"> {
-  timelineItems: { nodes: Array<{ createdAt: string }> };
-  reviews: ReviewConnection;
-}
 
 // Fetches the review pages that follow `pr.reviews.pageInfo.endCursor`,
 // or every review when that cursor is null.
@@ -34,56 +24,6 @@ export function mergeReviewPages(inline: ReviewConnection, remaining: PRReview[]
   // Without a cursor the continuation restarted from the first review.
   if (inline.pageInfo.endCursor === null) return remaining;
   return [...inline.nodes, ...remaining];
-}
-
-// Drops the nested pageInfo and flattens the ready-for-review event so the result
-// matches the shared PullRequest shape.
-export function toPullRequest(node: PullRequestNode, reviews: PRReview[]): PullRequest {
-  const { reviews: _connection, timelineItems, comments, ...pullRequest } = node;
-  return {
-    ...pullRequest,
-    readyForReviewAt: timelineItems.nodes[0]?.createdAt ?? null,
-    reviews: { nodes: reviews },
-    comments,
-  };
-}
-
-export async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  mapper: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  if (items.length === 0) return [];
-
-  const results: Array<R | undefined> = Array.from({ length: items.length });
-  const workerCount = Math.max(1, Math.min(limit, items.length));
-  let nextIndex = 0;
-
-  async function worker(): Promise<void> {
-    while (true) {
-      const currentIndex = nextIndex;
-      nextIndex++;
-      if (currentIndex >= items.length) return;
-      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
-    }
-  }
-
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
-
-  return results.map((result, index) => {
-    if (result === undefined) {
-      throw new Error(`Concurrency mapping failed at index ${index}.`);
-    }
-    return result;
-  });
-}
-
-// Caps a list of partial fetch reasons so the response stays readable.
-export function uniqueReasons(reasons: string[]): string[] {
-  const unique = Array.from(new Set(reasons.filter(Boolean)));
-  if (unique.length <= 5) return unique;
-  const omitted = unique.length - 4;
-  return [...unique.slice(0, 4), `${omitted} additional partial fetch issue(s) omitted.`];
 }
 
 // Completes the reviews of PRs whose inline page has more after it, keeping PR order.
@@ -122,7 +62,11 @@ export async function resolveReviews({
         }
         return {
           kind: "complete",
-          pullRequest: toPullRequest(pr, mergeReviewPages(pr.reviews, remaining)),
+          pullRequest: toPullRequest({
+            repo,
+            node: pr,
+            reviews: mergeReviewPages(pr.reviews, remaining),
+          }),
         };
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "Unknown review fetch error";
@@ -132,7 +76,7 @@ export async function resolveReviews({
         );
         return {
           kind: "partial",
-          pullRequest: toPullRequest(pr, pr.reviews.nodes),
+          pullRequest: toPullRequest({ repo, node: pr, reviews: pr.reviews.nodes }),
           reason: `Failed to fetch complete reviews for ${repo}#${pr.number}: ${message}`,
         };
       }
@@ -144,7 +88,7 @@ export async function resolveReviews({
     (pr) =>
       continuedByNumber.get(pr.number) ?? {
         kind: "complete",
-        pullRequest: toPullRequest(pr, pr.reviews.nodes),
+        pullRequest: toPullRequest({ repo, node: pr, reviews: pr.reviews.nodes }),
       },
   );
 }

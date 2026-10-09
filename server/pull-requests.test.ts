@@ -3,9 +3,9 @@ import { randomUUID } from "node:crypto";
 import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PullRequest } from "../shared/types.ts";
 import type { fetchPullRequestDetails, listPullRequests, PullRequestListing } from "./github.ts";
 import type { FetchedPullRequest, PullRequestRef } from "./pull-request-details.ts";
+import { pullRequestSchema, type PullRequest } from "./pull-request-model.ts";
 
 const REPO = "acme/widgets";
 
@@ -57,7 +57,6 @@ const {
   classifyCachedPullRequest,
   loadPullRequests,
   normalizeRepos,
-  pullRequestSchema,
 } = await import("./pull-requests.ts");
 if (previousCacheDir === undefined) delete process.env.CACHE_DIR;
 else process.env.CACHE_DIR = previousCacheDir;
@@ -80,6 +79,7 @@ beforeEach(async () => {
 
 function makePR(number: number, updatedAt = "2026-03-20T09:00:00Z"): PullRequest {
   return {
+    repo: REPO,
     number,
     title: `Widget change #${number}`,
     state: "MERGED",
@@ -97,7 +97,6 @@ function makePR(number: number, updatedAt = "2026-03-20T09:00:00Z"): PullRequest
           author: { login: "bob", __typename: "User" },
           state: "APPROVED",
           submittedAt: "2026-03-15T12:00:00Z",
-          body: "",
         },
       ],
     },
@@ -161,12 +160,12 @@ describe("cache keys", () => {
     expect(keys.size).toBe(4);
   });
 
-  test("keys start with the version 2 namespaces", () => {
+  test("listings and PRs have their own versioned namespaces", () => {
     expect(buildListingCacheKey({ repos: [REPO] })).toMatch(
       /^pull-request-listing-v3-[0-9a-f]{64}$/,
     );
     expect(buildPullRequestCacheKey({ repo: REPO, number: 1 })).toMatch(
-      /^pull-request-v3-[0-9a-f]{64}$/,
+      /^pull-request-v4-[0-9a-f]{64}$/,
     );
   });
 
@@ -192,7 +191,10 @@ describe("cache entry validation", () => {
     };
     await writeCache(key, listing, "listing");
 
-    expect(await readCache(key, cachedListingSchema)).toEqual(listing);
+    expect(await readCache(key, cachedListingSchema)).toEqual({
+      value: listing,
+      cachedAt: expect.any(String),
+    });
   });
 
   test("deletes a listing entry whose value does not match the schema", async () => {
@@ -207,11 +209,14 @@ describe("cache entry validation", () => {
     expect(await fileExists(cacheFilePath(key))).toBe(false);
   });
 
-  test("returns a stored PR", async () => {
+  test("returns a stored PR and when it was cached", async () => {
     const key = buildPullRequestCacheKey({ repo: REPO, number: 1 });
+    const before = Date.now();
     await writeCache(key, makePR(1), "pullRequest");
+    const cached = await readCache(key, pullRequestSchema);
 
-    expect(await readCache(key, pullRequestSchema)).toEqual(makePR(1));
+    expect(cached?.value).toEqual(makePR(1));
+    expect(Date.parse(cached?.cachedAt ?? "")).toBeGreaterThanOrEqual(before - 1000);
   });
 
   test("deletes a PR entry without updatedAt", async () => {
@@ -281,7 +286,8 @@ describe("loadPullRequests", () => {
       reusedPRs: 0,
     });
     expect(
-      await readCache(buildPullRequestCacheKey({ repo: REPO, number: 2 }), pullRequestSchema),
+      (await readCache(buildPullRequestCacheKey({ repo: REPO, number: 2 }), pullRequestSchema))
+        ?.value,
     ).toEqual(makePR(2));
   });
 
@@ -337,7 +343,8 @@ describe("loadPullRequests", () => {
     expect(loaded.fetchResult.prs).toEqual([makePR(1), updated, makePR(3), makePR(4)]);
     expect(loaded.dataSource).toMatchObject({ listing: "github", fetchedPRs: 2, reusedPRs: 2 });
     expect(
-      await readCache(buildPullRequestCacheKey({ repo: REPO, number: 2 }), pullRequestSchema),
+      (await readCache(buildPullRequestCacheKey({ repo: REPO, number: 2 }), pullRequestSchema))
+        ?.value,
     ).toEqual(updated);
   });
 
@@ -349,7 +356,7 @@ describe("loadPullRequests", () => {
     await loadPullRequests(query, { skipCache: true });
     const listing = await readCache(buildListingCacheKey(query), cachedListingSchema);
 
-    expect(listing?.prs.map((pr) => pr.number)).toEqual([1, 2]);
+    expect(listing?.value.prs.map((pr) => pr.number)).toEqual([1, 2]);
   });
 
   test("serves a partial PR but does not cache it", async () => {
@@ -544,6 +551,6 @@ describe("concurrent loadPullRequests", () => {
     await Promise.all([plain, refresh]);
 
     const cached = await readCache(buildListingCacheKey(query), cachedListingSchema);
-    expect(cached?.prs.map((pr) => pr.number)).toEqual([1, 2]);
+    expect(cached?.value.prs.map((pr) => pr.number)).toEqual([1, 2]);
   });
 });

@@ -39,7 +39,6 @@ function review({
     author: by === null ? null : { login: by, __typename: type },
     state,
     submittedAt,
-    body: "",
   };
 }
 
@@ -80,6 +79,7 @@ function makePR({
   moreComments?: boolean;
 }): PullRequest {
   return {
+    repo: "acme/widgets",
     number,
     title: `Widget change #${number}`,
     state,
