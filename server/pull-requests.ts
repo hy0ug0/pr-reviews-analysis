@@ -1,13 +1,15 @@
 import { z } from "zod";
 import type { Equals } from "../shared/type-equals.ts";
+import { describeCacheUsage } from "../shared/data-source.ts";
 import type { DataSource } from "../shared/types.ts";
-import { buildCacheKey, readCache, shortCacheKey, writeCache } from "./cache.ts";
+import { buildCacheKey, readCache, shortCacheKey, writeCache, type CacheHit } from "./cache.ts";
 import {
   fetchPullRequestDetails,
   listPullRequests,
   type ListedPullRequest,
   type PullRequestListing,
 } from "./github.ts";
+import { createGitHubRun, type GitHubRun } from "./github-run.ts";
 import { mapWithConcurrency } from "./lib/concurrency.ts";
 import { uniqueReasons } from "./lib/partial-reasons.ts";
 import { createLogger } from "./logger.ts";
@@ -68,7 +70,7 @@ export interface LoadedPullRequests {
 export type PullRequestCacheLookup =
   | { kind: "missing" }
   | { kind: "stale"; cachedUpdatedAt: string }
-  | { kind: "fresh"; pullRequest: PullRequest };
+  | { kind: "fresh"; pullRequest: PullRequest; cachedAt: string };
 
 // GitHub repository names are case-insensitive, so "Acme/Widgets,acme/widgets" and
 // "acme/widgets" name the same data and share one cache entry.
@@ -95,13 +97,13 @@ export function buildPullRequestCacheKey(ref: PullRequestRef): string {
 
 export function classifyCachedPullRequest(
   listed: ListedPullRequest,
-  cached: PullRequest | null,
+  cached: CacheHit<PullRequest> | null,
 ): PullRequestCacheLookup {
   if (!cached) return { kind: "missing" };
-  if (cached.updatedAt !== listed.updatedAt) {
-    return { kind: "stale", cachedUpdatedAt: cached.updatedAt };
+  if (cached.value.updatedAt !== listed.updatedAt) {
+    return { kind: "stale", cachedUpdatedAt: cached.value.updatedAt };
   }
-  return { kind: "fresh", pullRequest: cached };
+  return { kind: "fresh", pullRequest: cached.value, cachedAt: cached.cachedAt };
 }
 
 function errorMessage(error: unknown): string {
@@ -116,11 +118,13 @@ const inFlightLoads = new Map<string, Promise<LoadedPullRequests>>();
 const latestListingIds = new Map<string, number>();
 let nextListingId = 0;
 
+// durationMs is the time spent listing on GitHub, 0 for a cache hit.
 async function loadListing(
   query: PullRequestQuery,
   cacheKey: string,
   skipCache: boolean,
-): Promise<{ listing: CachedListing; source: DataSource["listing"] }> {
+  run: GitHubRun,
+): Promise<{ listing: CachedListing; source: DataSource["listing"]; durationMs: number }> {
   const shortKey = shortCacheKey(cacheKey);
 
   if (skipCache) {
@@ -129,18 +133,20 @@ async function loadListing(
     const cached = await readCache(cacheKey, cachedListingSchema);
     if (cached) {
       log.info(`Listing cache hit for key ${shortKey} (listed at ${cached.value.listedAt})`);
-      return { listing: cached.value, source: "cache" };
+      return { listing: cached.value, source: "cache", durationMs: 0 };
     }
     log.info(`Listing cache miss for key ${shortKey}`);
   }
 
   const listingId = ++nextListingId;
   latestListingIds.set(cacheKey, listingId);
+  const startedAt = performance.now();
   const listedAt = new Date().toISOString();
-  const listing: CachedListing = { listedAt, ...(await listPullRequests(query)) };
+  const listing: CachedListing = { listedAt, ...(await listPullRequests(query, run)) };
+  const durationMs = performance.now() - startedAt;
   if (latestListingIds.get(cacheKey) !== listingId) {
     log.info(`Not caching listing ${shortKey}: a newer listing for the same key started`);
-    return { listing, source: "github" };
+    return { listing, source: "github", durationMs };
   }
   latestListingIds.delete(cacheKey);
   // Losing a listing to a cache write error would be worse than not caching it.
@@ -149,7 +155,7 @@ async function loadListing(
   } catch (error: unknown) {
     log.warn(`Failed to write listing cache entry ${shortKey}: ${errorMessage(error)}`);
   }
-  return { listing, source: "github" };
+  return { listing, source: "github", durationMs };
 }
 
 async function storePullRequests(
@@ -205,7 +211,13 @@ async function loadPullRequestsNow(
   cacheKey: string,
   skipCache: boolean,
 ): Promise<LoadedPullRequests> {
-  const { listing, source } = await loadListing(query, cacheKey, skipCache);
+  // Requests that join this load share its run, so they report the same numbers.
+  const run = createGitHubRun();
+  const {
+    listing,
+    source,
+    durationMs: listingMs,
+  } = await loadListing(query, cacheKey, skipCache, run);
 
   const lookups = await mapWithConcurrency(
     listing.prs,
@@ -213,7 +225,7 @@ async function loadPullRequestsNow(
     async (listed): Promise<PullRequestCacheLookup> =>
       classifyCachedPullRequest(
         listed,
-        (await readCache(buildPullRequestCacheKey(listed), pullRequestSchema))?.value ?? null,
+        await readCache(buildPullRequestCacheKey(listed), pullRequestSchema),
       ),
   );
 
@@ -231,18 +243,24 @@ async function loadPullRequestsNow(
     `${listing.prs.length - refsToFetch.length}/${listing.prs.length} PRs reused from cache; fetching ${refsToFetch.length} (${missing} not cached, ${stale} updated)`,
   );
 
-  const fetched = await fetchPullRequestDetails(refsToFetch);
+  const detailsStartedAt = performance.now();
+  const fetched = await fetchPullRequestDetails(refsToFetch, run);
+  const detailsMs = performance.now() - detailsStartedAt;
 
   const prs: PullRequest[] = [];
   const toStore: Array<{ ref: PullRequestRef; pullRequest: PullRequest }> = [];
   const detailReasons: string[] = [];
   let reusedPRs = 0;
   let fetchedPRs = 0;
+  let oldestReusedCachedAt: string | null = null;
   listing.prs.forEach((listed, index) => {
     const lookup = lookups[index];
     if (lookup.kind === "fresh") {
       prs.push(lookup.pullRequest);
       reusedPRs++;
+      if (oldestReusedCachedAt === null || isEarlier(lookup.cachedAt, oldestReusedCachedAt)) {
+        oldestReusedCachedAt = lookup.cachedAt;
+      }
       return;
     }
 
@@ -276,6 +294,18 @@ async function loadPullRequestsNow(
 
   await storePullRequests(toStore);
 
+  const dataSource: DataSource = {
+    listing: source,
+    listedAt: listing.listedAt,
+    fetchedPRs,
+    reusedPRs,
+    oldestReusedCachedAt,
+    githubRequests: run.requests,
+    fetchDurationMs: run.requests > 0 ? Math.round(listingMs + detailsMs) : null,
+    skippedCache: skipCache,
+  };
+  log.info(describeCacheUsage(dataSource, Date.now()));
+
   return {
     fetchResult: {
       prs,
@@ -284,6 +314,11 @@ async function loadPullRequestsNow(
       isComplete: listing.isComplete && detailReasons.length === 0,
       partialReasons: uniqueReasons([...listing.partialReasons, ...detailReasons]),
     },
-    dataSource: { listing: source, listedAt: listing.listedAt, fetchedPRs, reusedPRs },
+    dataSource,
   };
+}
+
+// cachedAt values are ISO strings written by writeCache, but compare them as instants anyway.
+function isEarlier(a: string, b: string): boolean {
+  return Date.parse(a) < Date.parse(b);
 }

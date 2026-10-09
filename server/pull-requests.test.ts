@@ -4,6 +4,7 @@ import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { fetchPullRequestDetails, listPullRequests, PullRequestListing } from "./github.ts";
+import type { GitHubRun } from "./github-run.ts";
 import type { FetchedPullRequest, PullRequestRef } from "./pull-request-details.ts";
 import { pullRequestSchema, type PullRequest } from "./pull-request-model.ts";
 
@@ -16,9 +17,23 @@ let listingExtras: Pick<PullRequestListing, "isComplete" | "partialReasons"> = {
   isComplete: true,
   partialReasons: [],
 };
+// How long each fake GitHub call takes, by repo. Calls yield either way, so concurrent loads
+// interleave their requests.
+let callDelayMs = new Map<string, number>();
 
+async function fakeGitHubCall(run: GitHubRun, repo: string) {
+  run.requests++;
+  await Bun.sleep(callDelayMs.get(repo) ?? 0);
+}
+
+// One listing request per repo and one detail request per PR, so request counts are easy
+// to predict.
 const listMock = mock(
-  async ({ repos }: Parameters<typeof listPullRequests>[0]): Promise<PullRequestListing> => {
+  async (
+    { repos }: Parameters<typeof listPullRequests>[0],
+    run: GitHubRun,
+  ): Promise<PullRequestListing> => {
+    for (const repo of repos) await fakeGitHubCall(run, repo);
     const prs = Array.from(remotePRs, ([key, pr]) => ({
       repo: key.slice(0, key.indexOf("#")),
       number: pr.number,
@@ -28,8 +43,9 @@ const listMock = mock(
   },
 );
 const detailsMock = mock(
-  async (refs: Parameters<typeof fetchPullRequestDetails>[0]) =>
-    new Map(
+  async (refs: Parameters<typeof fetchPullRequestDetails>[0], run: GitHubRun) => {
+    for (const ref of refs) await fakeGitHubCall(run, ref.repo);
+    return new Map(
       refs.map((ref): [string, FetchedPullRequest] => {
         const key = `${ref.repo}#${ref.number}`;
         const remote = remotePRs.get(key);
@@ -38,7 +54,8 @@ const detailsMock = mock(
           : { kind: "failed", number: ref.number, reason: `missing ${key}` };
         return [key, fetchOverrides.get(key) ?? outcome];
       }),
-    ),
+    );
+  },
 );
 await mock.module("./github.ts", () => ({
   listPullRequests: listMock,
@@ -73,6 +90,7 @@ beforeEach(async () => {
   remotePRs = new Map();
   fetchOverrides = new Map();
   listingExtras = { isComplete: true, partialReasons: [] };
+  callDelayMs = new Map();
   listMock.mockClear();
   detailsMock.mockClear();
 });
@@ -116,6 +134,18 @@ function setRemote(...prs: PullRequest[]) {
 
 function fetchedRefs(): PullRequestRef[][] {
   return detailsMock.mock.calls.map(([refs]) => refs);
+}
+
+const FAR_FUTURE = "2100-01-01T00:00:00.000Z";
+
+// writeCache always stamps the current time, so an older entry is written by hand.
+async function writePullRequestEntry(pr: PullRequest, cachedAt: string) {
+  const key = buildPullRequestCacheKey({ repo: pr.repo, number: pr.number });
+  await writeFile(
+    cacheFilePath(key),
+    JSON.stringify({ cachedAt, expiresAt: FAR_FUTURE, value: pr }),
+    "utf8",
+  );
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -244,15 +274,20 @@ describe("classifyCachedPullRequest", () => {
     expect(classifyCachedPullRequest(listed, null)).toEqual({ kind: "missing" });
   });
 
+  const cachedAt = "2026-03-21T09:00:00.000Z";
+
   test("fresh when the cached updatedAt matches the listing", () => {
-    expect(classifyCachedPullRequest(listed, makePR(1))).toEqual({
+    expect(classifyCachedPullRequest(listed, { value: makePR(1), cachedAt })).toEqual({
       kind: "fresh",
       pullRequest: makePR(1),
+      cachedAt,
     });
   });
 
   test("stale when the cached updatedAt differs from the listing", () => {
-    expect(classifyCachedPullRequest(listed, makePR(1, "2026-03-10T09:00:00Z"))).toEqual({
+    expect(
+      classifyCachedPullRequest(listed, { value: makePR(1, "2026-03-10T09:00:00Z"), cachedAt }),
+    ).toEqual({
       kind: "stale",
       cachedUpdatedAt: "2026-03-10T09:00:00Z",
     });
@@ -284,6 +319,10 @@ describe("loadPullRequests", () => {
       listedAt: expect.any(String),
       fetchedPRs: 2,
       reusedPRs: 0,
+      oldestReusedCachedAt: null,
+      githubRequests: 3,
+      fetchDurationMs: expect.any(Number),
+      skippedCache: false,
     });
     expect(
       (await readCache(buildPullRequestCacheKey({ repo: REPO, number: 2 }), pullRequestSchema))
@@ -306,6 +345,10 @@ describe("loadPullRequests", () => {
       listedAt: first.dataSource.listedAt,
       fetchedPRs: 0,
       reusedPRs: 2,
+      oldestReusedCachedAt: expect.any(String),
+      githubRequests: 0,
+      fetchDurationMs: null,
+      skippedCache: false,
     });
   });
 
@@ -341,11 +384,64 @@ describe("loadPullRequests", () => {
       ],
     ]);
     expect(loaded.fetchResult.prs).toEqual([makePR(1), updated, makePR(3), makePR(4)]);
-    expect(loaded.dataSource).toMatchObject({ listing: "github", fetchedPRs: 2, reusedPRs: 2 });
+    expect(loaded.dataSource).toMatchObject({
+      listing: "github",
+      fetchedPRs: 2,
+      reusedPRs: 2,
+      // One listing request plus one per refetched PR.
+      githubRequests: 3,
+      fetchDurationMs: expect.any(Number),
+      skippedCache: true,
+    });
     expect(
       (await readCache(buildPullRequestCacheKey({ repo: REPO, number: 2 }), pullRequestSchema))
         ?.value,
     ).toEqual(updated);
+  });
+
+  test("full hit: reports the oldest reused entry's cachedAt", async () => {
+    setRemote(makePR(1), makePR(2));
+    await loadPullRequests(query, { skipCache: false });
+    const oldCachedAt = "2026-10-01T08:00:00.000Z";
+    await writePullRequestEntry(makePR(2), oldCachedAt);
+
+    const loaded = await loadPullRequests(query, { skipCache: false });
+
+    expect(loaded.dataSource).toMatchObject({
+      listing: "cache",
+      reusedPRs: 2,
+      oldestReusedCachedAt: oldCachedAt,
+      githubRequests: 0,
+      fetchDurationMs: null,
+    });
+  });
+
+  test("miss: counts only the fake GitHub calls and times them", async () => {
+    setRemote(makePR(1), makePR(2), makePR(3));
+    callDelayMs.set(REPO, 20);
+
+    const loaded = await loadPullRequests(query, { skipCache: false });
+
+    expect(loaded.dataSource).toMatchObject({ githubRequests: 4, skippedCache: false });
+    // Four calls of 20 ms each, one after the other.
+    expect(loaded.dataSource.fetchDurationMs).toBeGreaterThanOrEqual(75);
+  });
+
+  test("skipCache with nothing cached: fetches everything and says the cache was skipped", async () => {
+    setRemote(makePR(1));
+
+    const loaded = await loadPullRequests(query, { skipCache: true });
+
+    expect(loaded.dataSource).toEqual({
+      listing: "github",
+      listedAt: expect.any(String),
+      fetchedPRs: 1,
+      reusedPRs: 0,
+      oldestReusedCachedAt: null,
+      githubRequests: 2,
+      fetchDurationMs: expect.any(Number),
+      skippedCache: true,
+    });
   });
 
   test("skipCache overwrites the listing entry", async () => {
@@ -428,12 +524,15 @@ describe("loadPullRequests", () => {
       { skipCache: true },
     );
 
-    expect(listMock).toHaveBeenCalledWith({
-      repos: ["acme/gadgets", "acme/widgets"],
-      label: "bug",
-      since: "2026-03-01",
-      until: "2026-03-31",
-    });
+    expect(listMock).toHaveBeenCalledWith(
+      {
+        repos: ["acme/gadgets", "acme/widgets"],
+        label: "bug",
+        since: "2026-03-01",
+        until: "2026-03-31",
+      },
+      expect.anything(),
+    );
   });
 
   test("never reads a version 1 entry", async () => {
@@ -486,6 +585,25 @@ describe("concurrent loadPullRequests", () => {
     expect(listMock).toHaveBeenCalledTimes(1);
     expect(detailsMock).toHaveBeenCalledTimes(1);
     expect(second).toBe(first);
+  });
+
+  test("different queries in parallel count their own requests and time", async () => {
+    const GADGETS = "acme/gadgets";
+    setRemote(makePR(1), makePR(2), makePR(3));
+    remotePRs.set(`${GADGETS}#7`, { ...makePR(7), repo: GADGETS });
+    callDelayMs.set(REPO, 40);
+    callDelayMs.set(GADGETS, 1);
+
+    const [widgets, gadgets] = await Promise.all([
+      loadPullRequests(query, { skipCache: false }),
+      loadPullRequests({ ...query, repos: [GADGETS] }, { skipCache: true }),
+    ]);
+
+    expect(widgets.dataSource).toMatchObject({ githubRequests: 4, skippedCache: false });
+    expect(gadgets.dataSource).toMatchObject({ githubRequests: 2, skippedCache: true });
+    expect(widgets.dataSource.fetchDurationMs).toBeGreaterThanOrEqual(150);
+    // gadgets finished long before widgets, so its time does not include widgets' calls.
+    expect(gadgets.dataSource.fetchDurationMs).toBeLessThan(100);
   });
 
   test("a plain request joins a skipCache one in flight", async () => {
