@@ -52,8 +52,10 @@ function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 }
 
+// Items wrap at spaces only when one is wider than the whole line, as on a phone at 200%
+// zoom. A no-break space keeps each number with the word after it ("592 PRs", "14 s").
 function item(text: string, title: string | null = null): DataSourceLineItem {
-  return { text, title };
+  return { text: text.replace(/(\d) /g, "$1\u00A0"), title };
 }
 
 // The data-source line under the results: where the PRs came from, what it cost on GitHub,

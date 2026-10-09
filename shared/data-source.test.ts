@@ -21,7 +21,7 @@ function dataSource(overrides: Partial<DataSource>): DataSource {
 
 function lineText(source: DataSource, matchingPRs = 592): string {
   return describeDataSource({ dataSource: source, matchingPRs, now: NOW })
-    .items.map((item) => item.text)
+    .items.map((item) => item.text.replaceAll("\u00A0", " "))
     .join(" · ");
 }
 
@@ -150,4 +150,11 @@ test("describeCacheUsage sums up a run in one line", () => {
   expect(describeCacheUsage(dataSource({ skippedCache: true }), NOW)).toBe(
     "Cache usage: 592/592 PRs from cache (100%), 0 fetched, 0 GitHub requests, listing from cache, oldest cached 2 h ago, cache skipped",
   );
+});
+
+test("keeps each number with the word after it", () => {
+  const source = dataSource({ fetchedPRs: 52, reusedPRs: 540, githubRequests: 2 });
+  const [first] = describeDataSource({ dataSource: source, matchingPRs: 592, now: NOW }).items;
+
+  expect(first.text).toBe("540\u00A0of 592\u00A0PRs from cache (91%)");
 });
