@@ -130,11 +130,19 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// The server is one process, so in-memory state is enough to order concurrent requests.
+// Loads in flight, by mode and listing key, so identical concurrent requests share one.
+const inFlightLoads = new Map<string, Promise<LoadedPullRequests>>();
+// The last listing started per listing key. Only that one may write the listing entry, so a
+// slower, older listing never replaces a newer one.
+const latestListingIds = new Map<string, number>();
+let nextListingId = 0;
+
 async function loadListing(
   query: PullRequestQuery,
+  cacheKey: string,
   skipCache: boolean,
 ): Promise<{ listing: CachedListing; source: DataSource["listing"] }> {
-  const cacheKey = buildListingCacheKey(query);
   const shortKey = shortCacheKey(cacheKey);
 
   if (skipCache) {
@@ -148,8 +156,15 @@ async function loadListing(
     log.info(`Listing cache miss for key ${shortKey}`);
   }
 
+  const listingId = ++nextListingId;
+  latestListingIds.set(cacheKey, listingId);
   const listedAt = new Date().toISOString();
   const listing: CachedListing = { listedAt, ...(await listPullRequests(query)) };
+  if (latestListingIds.get(cacheKey) !== listingId) {
+    log.info(`Not caching listing ${shortKey}: a newer listing for the same key started`);
+    return { listing, source: "github" };
+  }
+  latestListingIds.delete(cacheKey);
   // Losing a listing to a cache write error would be worse than not caching it.
   try {
     await writeCache(cacheKey, listing, "listing");
@@ -180,12 +195,39 @@ async function storePullRequests(
 
 // Lists the query's PRs (from the listing cache unless skipCache), reuses every PR whose
 // cached updatedAt matches the listing, and fetches only the others from GitHub.
-export async function loadPullRequests(
+// A request joins an identical one in flight. A skipCache request lists from GitHub, so any
+// request may join it; it never joins a plain one, which may serve the cached listing.
+export function loadPullRequests(
   query: PullRequestQuery,
   { skipCache }: { skipCache: boolean },
 ): Promise<LoadedPullRequests> {
-  const repos = normalizeRepos(query.repos);
-  const { listing, source } = await loadListing({ ...query, repos }, skipCache);
+  const normalizedQuery = { ...query, repos: normalizeRepos(query.repos) };
+  const cacheKey = buildListingCacheKey(normalizedQuery);
+  const refreshKey = `refresh:${cacheKey}`;
+  const loadKey = `load:${cacheKey}`;
+
+  for (const key of skipCache ? [refreshKey] : [refreshKey, loadKey]) {
+    const inFlight = inFlightLoads.get(key);
+    if (inFlight) {
+      log.info(`Joining the request in flight for key ${shortCacheKey(cacheKey)}`);
+      return inFlight;
+    }
+  }
+
+  const ownKey = skipCache ? refreshKey : loadKey;
+  const load = loadPullRequestsNow(normalizedQuery, cacheKey, skipCache).finally(() => {
+    if (inFlightLoads.get(ownKey) === load) inFlightLoads.delete(ownKey);
+  });
+  inFlightLoads.set(ownKey, load);
+  return load;
+}
+
+async function loadPullRequestsNow(
+  query: PullRequestQuery,
+  cacheKey: string,
+  skipCache: boolean,
+): Promise<LoadedPullRequests> {
+  const { listing, source } = await loadListing(query, cacheKey, skipCache);
 
   const lookups = await mapWithConcurrency(
     listing.prs,

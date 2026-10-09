@@ -457,3 +457,84 @@ describe("loadPullRequests", () => {
     expect((await readdir(cacheDir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 });
+
+describe("concurrent loadPullRequests", () => {
+  test("identical requests share one listing and one detail fetch", async () => {
+    setRemote(makePR(1), makePR(2));
+
+    const [first, second] = await Promise.all([
+      loadPullRequests(query, { skipCache: false }),
+      loadPullRequests({ ...query, repos: [" ACME/Widgets"] }, { skipCache: false }),
+    ]);
+
+    expect(listMock).toHaveBeenCalledTimes(1);
+    expect(detailsMock).toHaveBeenCalledTimes(1);
+    expect(second).toBe(first);
+  });
+
+  test("a plain request joins a skipCache one in flight", async () => {
+    setRemote(makePR(1));
+
+    await Promise.all([
+      loadPullRequests(query, { skipCache: true }),
+      loadPullRequests(query, { skipCache: false }),
+    ]);
+
+    expect(listMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("a skipCache request does not join a plain one in flight", async () => {
+    setRemote(makePR(1));
+
+    const [plain, refresh] = await Promise.all([
+      loadPullRequests(query, { skipCache: false }),
+      loadPullRequests(query, { skipCache: true }),
+    ]);
+
+    expect(listMock).toHaveBeenCalledTimes(2);
+    expect(refresh).not.toBe(plain);
+  });
+
+  test("a failed load is shared, then forgotten", async () => {
+    setRemote(makePR(1));
+    listMock.mockImplementationOnce(() => Promise.reject(new Error("rate limited")));
+
+    const results = await Promise.allSettled([
+      loadPullRequests(query, { skipCache: false }),
+      loadPullRequests(query, { skipCache: false }),
+    ]);
+    const retried = await loadPullRequests(query, { skipCache: false });
+
+    expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+    expect(listMock).toHaveBeenCalledTimes(2);
+    expect(retried.fetchResult.prs).toEqual([makePR(1)]);
+  });
+
+  test("an older listing that finishes last does not replace the newer one", async () => {
+    const pending: Array<(listing: PullRequestListing) => void> = [];
+    const listing = (...numbers: number[]): PullRequestListing => ({
+      prs: numbers.map((number) => ({ repo: REPO, number, updatedAt: makePR(number).updatedAt })),
+      matchingPRs: numbers.length,
+      isComplete: true,
+      partialReasons: [],
+    });
+    const deferred = () =>
+      new Promise<PullRequestListing>((resolve) => {
+        pending.push(resolve);
+      });
+    listMock.mockImplementationOnce(deferred).mockImplementationOnce(deferred);
+    setRemote(makePR(1), makePR(2));
+
+    const plain = loadPullRequests(query, { skipCache: false });
+    const refresh = loadPullRequests(query, { skipCache: true });
+    while (pending.length < 2) await Bun.sleep(1);
+    // The second listing started later, so it sees PR 2, created in between.
+    pending[1](listing(1, 2));
+    await Promise.race([plain, refresh]);
+    pending[0](listing(1));
+    await Promise.all([plain, refresh]);
+
+    const cached = await readCache(buildListingCacheKey(query), cachedListingSchema);
+    expect(cached?.prs.map((pr) => pr.number)).toEqual([1, 2]);
+  });
+});
