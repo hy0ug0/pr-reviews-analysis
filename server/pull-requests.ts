@@ -13,7 +13,7 @@ const CACHE_NAMESPACE = `pull-requests-v${CACHE_VERSION}`;
 
 const actorSchema = z.object({ login: z.string() }).nullable();
 
-const pullRequestFetchResultSchema: z.ZodType<PullRequestFetchResult> = z.object({
+export const pullRequestFetchResultSchema: z.ZodType<PullRequestFetchResult> = z.object({
   prs: z.array(
     z.object({
       number: z.number(),
@@ -51,24 +51,29 @@ export interface LoadedPullRequests {
 
 // GitHub repository names are case-insensitive, so "Acme/Widgets,acme/widgets" and
 // "acme/widgets" name the same data and share one cache entry.
-function normalizeRepos(repos: string[]): string[] {
+export function normalizeRepos(repos: string[]): string[] {
   const unique = new Set(repos.map((repo) => repo.trim().toLowerCase()).filter(Boolean));
   return Array.from(unique).sort();
 }
 
 // The team list is not part of the key because analyze() applies the team filter on every
-// request. The fetch uses the same normalized repo list as the key.
+// request.
+export function buildPullRequestsCacheKey(query: PullRequestQuery): string {
+  return buildCacheKey(CACHE_NAMESPACE, {
+    repos: normalizeRepos(query.repos),
+    label: query.label ?? null,
+    since: query.since ?? null,
+    until: query.until ?? null,
+  });
+}
+
+// The fetch uses the same normalized repo list as the key.
 export async function loadPullRequests(
   query: PullRequestQuery,
   { skipCache }: { skipCache: boolean },
 ): Promise<LoadedPullRequests> {
   const repos = normalizeRepos(query.repos);
-  const cacheKey = buildCacheKey(CACHE_NAMESPACE, {
-    repos,
-    label: query.label ?? null,
-    since: query.since ?? null,
-    until: query.until ?? null,
-  });
+  const cacheKey = buildPullRequestsCacheKey({ ...query, repos });
 
   if (skipCache) {
     log.info(`Skipping cache read for key ${cacheKey}`);
