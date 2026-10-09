@@ -1,11 +1,19 @@
 import { execFile } from "node:child_process";
 import type { AppSuggestion, PRReview, PullRequest } from "../shared/types.ts";
 import { createLogger } from "./logger.ts";
+import {
+  mergeReviewPages,
+  toPullRequest,
+  type PageInfo,
+  type ReviewConnection,
+  type SearchPullRequestNode,
+} from "./review-pages.ts";
 
 const log = createLogger("fetch");
 
 const SEARCH_PAGE_SIZE = 100;
 const REVIEW_PAGE_SIZE = 100;
+const INLINE_REVIEW_PAGE_SIZE = 50;
 const SEARCH_HARD_LIMIT = 1000;
 const MAX_SEARCH_PAGES = SEARCH_HARD_LIMIT / SEARCH_PAGE_SIZE;
 const REVIEW_FETCH_CONCURRENCY = 5;
@@ -31,6 +39,18 @@ query($searchQuery: String!, $first: Int!, $after: String) {
         mergedAt
         closedAt
         author { login }
+        reviews(first: ${INLINE_REVIEW_PAGE_SIZE}) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            author { login }
+            state
+            submittedAt
+            body
+          }
+        }
       }
     }
   }
@@ -111,28 +131,18 @@ query($searchQuery: String!, $first: Int!) {
   }
 }`;
 
-interface PageInfo {
-  hasNextPage: boolean;
-  endCursor: string | null;
-}
-
-type PullRequestWithoutReviews = Omit<PullRequest, "reviews">;
-
 interface SearchResponse {
   search: {
     issueCount: number;
     pageInfo: PageInfo;
-    nodes: PullRequestWithoutReviews[];
+    nodes: SearchPullRequestNode[];
   };
 }
 
 interface ReviewsResponse {
   repository: {
     pullRequest: {
-      reviews: {
-        pageInfo: PageInfo;
-        nodes: PRReview[];
-      };
+      reviews: ReviewConnection;
     } | null;
   } | null;
 }
@@ -185,7 +195,7 @@ interface DateWindow {
 
 interface FetchWindowResult {
   issueCount: number;
-  prs: PullRequestWithoutReviews[];
+  prs: SearchPullRequestNode[];
   isComplete: boolean;
   partialReasons: string[];
 }
@@ -390,13 +400,6 @@ function splitWindow(window: DateWindow): [DateWindow, DateWindow] | null {
   ];
 }
 
-function toPullRequest(node: PullRequestWithoutReviews, reviews: PRReview[]): PullRequest {
-  return {
-    ...node,
-    reviews: { nodes: reviews },
-  };
-}
-
 function uniqueReasons(reasons: string[]): string[] {
   const unique = Array.from(new Set(reasons.filter(Boolean)));
   if (unique.length <= 5) return unique;
@@ -565,7 +568,20 @@ async function fetchWindowPullRequests(
   });
   const issueCount = firstPage.search.issueCount;
   const partialReasons: string[] = [];
-  const prs: PullRequestWithoutReviews[] = [...firstPage.search.nodes];
+  const prs: SearchPullRequestNode[] = [...firstPage.search.nodes];
+
+  // The caller splits this window and discards its PRs, so skip the remaining pages.
+  if (issueCount > SEARCH_HARD_LIMIT && splitWindow(window)) {
+    log.info(
+      `Window ${window.since}..${window.until}: ${issueCount} matches exceed ${SEARCH_HARD_LIMIT}; stopping after page 1 to split`,
+    );
+    return {
+      issueCount,
+      prs,
+      isComplete: false,
+      partialReasons,
+    };
+  }
   let hasNextPage = firstPage.search.pageInfo.hasNextPage;
   let cursor = firstPage.search.pageInfo.endCursor;
   let pagesFetched = 1;
@@ -611,10 +627,14 @@ async function fetchWindowPullRequests(
   };
 }
 
-async function fetchPullRequestReviews(repo: string, number: number): Promise<PRReview[]> {
+async function fetchPullRequestReviews(
+  repo: string,
+  number: number,
+  after: string | null = null,
+): Promise<PRReview[]> {
   const { owner, name } = parseRepo(repo);
   let hasNextPage = true;
-  let cursor: string | null = null;
+  let cursor = after;
   const reviews: PRReview[] = [];
 
   while (hasNextPage) {
@@ -640,6 +660,12 @@ async function fetchPullRequestReviews(repo: string, number: number): Promise<PR
   return reviews;
 }
 
+// Returns every review of a PR whose first page came inline with the search results.
+async function fetchRemainingReviews(repo: string, pr: SearchPullRequestNode): Promise<PRReview[]> {
+  const remaining = await fetchPullRequestReviews(repo, pr.number, pr.reviews.pageInfo.endCursor);
+  return mergeReviewPages(pr.reviews, remaining);
+}
+
 async function fetchRepoPullRequests(
   repoInput: string,
   label: string | undefined,
@@ -659,7 +685,7 @@ async function fetchRepoPullRequests(
   const windowsToFetch: DateWindow[] = [{ ...range }];
   const partialReasons: string[] = [];
   const dedupeSet = new Set<string>();
-  const prNodes: PullRequestWithoutReviews[] = [];
+  const prNodes: SearchPullRequestNode[] = [];
   let matchingPRs = 0;
   let isComplete = true;
 
@@ -701,24 +727,25 @@ async function fetchRepoPullRequests(
     );
   }
 
+  const overflowPRs = prNodes.filter((pr) => pr.reviews.pageInfo.hasNextPage);
   log.info(
-    `Fetching reviews for ${prNodes.length} PRs in ${repo} (concurrency=${REVIEW_FETCH_CONCURRENCY})`,
+    `${overflowPRs.length}/${prNodes.length} PRs in ${repo} need extra review pages (concurrency=${REVIEW_FETCH_CONCURRENCY})`,
   );
   let completedReviewFetches = 0;
-  const reviewedPRs = await mapWithConcurrency(
-    prNodes,
+  const continuedPRs = await mapWithConcurrency(
+    overflowPRs,
     REVIEW_FETCH_CONCURRENCY,
     async (pr): Promise<{ pullRequest: PullRequest; isComplete: boolean; reason?: string }> => {
       try {
-        const reviews = await fetchPullRequestReviews(repo, pr.number);
+        const reviews = await fetchRemainingReviews(repo, pr);
         completedReviewFetches++;
         if (
-          prNodes.length <= 20 ||
+          overflowPRs.length <= 20 ||
           completedReviewFetches % 10 === 0 ||
-          completedReviewFetches === prNodes.length
+          completedReviewFetches === overflowPRs.length
         ) {
           log.info(
-            `Review fetch progress for ${repo}: ${completedReviewFetches}/${prNodes.length} PRs completed`,
+            `Review fetch progress for ${repo}: ${completedReviewFetches}/${overflowPRs.length} PRs completed`,
           );
         }
         return { pullRequest: toPullRequest(pr, reviews), isComplete: true };
@@ -726,19 +753,24 @@ async function fetchRepoPullRequests(
         const message = error instanceof Error ? error.message : "Unknown review fetch error";
         completedReviewFetches++;
         log.warn(
-          `Review fetch failed for ${repo}#${pr.number} (${completedReviewFetches}/${prNodes.length}): ${message}`,
+          `Review fetch failed for ${repo}#${pr.number} (${completedReviewFetches}/${overflowPRs.length}): ${message}`,
         );
         return {
-          pullRequest: toPullRequest(pr, []),
+          pullRequest: toPullRequest(pr, pr.reviews.nodes),
           isComplete: false,
           reason: `Failed to fetch complete reviews for ${repo}#${pr.number}: ${message}`,
         };
       }
     },
   );
+  const continuedByNumber = new Map(continuedPRs.map((item) => [item.pullRequest.number, item]));
 
   const completePRs: PullRequest[] = [];
-  for (const item of reviewedPRs) {
+  for (const pr of prNodes) {
+    const item = continuedByNumber.get(pr.number) ?? {
+      pullRequest: toPullRequest(pr, pr.reviews.nodes),
+      isComplete: true,
+    };
     completePRs.push(item.pullRequest);
     if (!item.isComplete) {
       isComplete = false;
