@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { COMMENTS_PAGE_SIZE, type AppSuggestion, type PRReview } from "../shared/types.ts";
+import type { AppSuggestion } from "../shared/types.ts";
+import { uniqueReasons } from "./lib/partial-reasons.ts";
 import { createLogger } from "./logger.ts";
 import {
   batchAlias,
@@ -12,13 +13,19 @@ import {
   type PullRequestBatchResponse,
   type PullRequestRef,
 } from "./pull-request-details.ts";
-import { uniqueReasons, type PageInfo, type ReviewConnection } from "./review-pages.ts";
+import {
+  describeSchemaError,
+  PULL_REQUEST_FIELDS,
+  REVIEW_FIELDS,
+  reviewConnectionSchema,
+  type PageInfo,
+  type PRReview,
+} from "./pull-request-model.ts";
 
 const log = createLogger("fetch");
 
 const SEARCH_PAGE_SIZE = 100;
 const REVIEW_PAGE_SIZE = 100;
-const INLINE_REVIEW_PAGE_SIZE = 50;
 const SEARCH_HARD_LIMIT = 1000;
 const MAX_SEARCH_PAGES = SEARCH_HARD_LIMIT / SEARCH_PAGE_SIZE;
 // Measured on nodejs/node: one call takes about 1.6 s for 50 PRs and 2.4 s for 100 (1 point
@@ -30,52 +37,6 @@ const FETCH_CONCURRENCY = 5;
 const GRAPHQL_MAX_ATTEMPTS = 3;
 const GITHUB_EPOCH_DATE = "2008-01-01";
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
-
-// The review fields every query that returns reviews selects.
-const REVIEW_FIELDS = `
-fragment ReviewFields on PullRequestReview {
-  author { login __typename }
-  state
-  submittedAt
-  body
-}`;
-
-// The PR fields every query that returns pull request data selects. A new field goes here,
-// in PullRequest (shared/types.ts) and in pullRequestSchema (pull-requests.ts), with a
-// CACHE_VERSION bump.
-const PULL_REQUEST_FIELDS = `
-fragment PullRequestFields on PullRequest {
-  number
-  title
-  state
-  url
-  createdAt
-  updatedAt
-  mergedAt
-  closedAt
-  isDraft
-  author { login }
-  timelineItems(itemTypes: [READY_FOR_REVIEW_EVENT], first: 1) {
-    nodes {
-      ... on ReadyForReviewEvent { createdAt }
-    }
-  }
-  reviews(first: ${INLINE_REVIEW_PAGE_SIZE}) {
-    pageInfo {
-      hasNextPage
-      endCursor
-    }
-    nodes { ...ReviewFields }
-  }
-  comments(first: ${COMMENTS_PAGE_SIZE}) {
-    pageInfo { hasNextPage }
-    nodes {
-      author { login __typename }
-      createdAt
-    }
-  }
-}
-${REVIEW_FIELDS}`;
 
 // Lists PRs without their data: updatedAt tells which cached PRs are still current.
 const PR_LISTING_QUERY = `
@@ -196,10 +157,11 @@ interface ListingResponse {
   };
 }
 
+// `reviews` is parsed with reviewConnectionSchema before use.
 interface ReviewsResponse {
   repository: {
     pullRequest: {
-      reviews: ReviewConnection;
+      reviews: unknown;
     } | null;
   } | null;
 }
@@ -754,9 +716,15 @@ async function fetchPullRequestReviews(
       throw new Error(`Pull request ${repo}#${number} was not found while fetching reviews.`);
     }
 
-    reviews.push(...pullRequest.reviews.nodes);
-    hasNextPage = pullRequest.reviews.pageInfo.hasNextPage;
-    cursor = pullRequest.reviews.pageInfo.endCursor;
+    const page = reviewConnectionSchema.safeParse(pullRequest.reviews);
+    if (!page.success) {
+      throw new Error(
+        `Unexpected review page for ${repo}#${number}: ${describeSchemaError(page.error)}`,
+      );
+    }
+    reviews.push(...page.data.nodes);
+    hasNextPage = page.data.pageInfo.hasNextPage;
+    cursor = page.data.pageInfo.endCursor;
   }
 
   return reviews;

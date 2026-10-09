@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Equals } from "./type-equals";
 import type { AnalysisResult } from "./types";
 
 const REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
@@ -117,6 +118,4 @@ export const analysisResultSchema = z.object({
 
 // Fails to compile when the schema and AnalysisResult differ in any field, so the
 // client never strips or rejects a field the server sends.
-type Equals<A, B> =
-  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 true satisfies Equals<z.infer<typeof analysisResultSchema>, AnalysisResult>;

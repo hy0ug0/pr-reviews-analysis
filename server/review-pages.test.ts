@@ -1,18 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import type { PRReview } from "../shared/types.ts";
 import {
-  mergeReviewPages,
-  resolveReviews,
   toPullRequest,
-  type FetchReviewContinuation,
-  type ReviewConnection,
+  type PRReview,
   type PullRequestNode,
-} from "./review-pages.ts";
+  type ReviewConnection,
+} from "./pull-request-model.ts";
+import { mergeReviewPages, resolveReviews, type FetchReviewContinuation } from "./review-pages.ts";
 
 const REPO = "acme/widgets";
 
 function makeReview(by: string, submittedAt: string): PRReview {
-  return { author: { login: by, __typename: "User" }, state: "COMMENTED", submittedAt, body: "" };
+  return { author: { login: by, __typename: "User" }, state: "COMMENTED", submittedAt };
 }
 
 function makeConnection(
@@ -23,16 +21,7 @@ function makeConnection(
   return { pageInfo: { hasNextPage, endCursor }, nodes };
 }
 
-const comments = {
-  pageInfo: { hasNextPage: false },
-  nodes: [{ author: { login: "frank", __typename: "User" }, createdAt: "2026-03-01T11:00:00Z" }],
-};
-
-function makeNode(
-  number: number,
-  reviews: ReviewConnection,
-  readyForReviewEvents: Array<{ createdAt: string }> = [],
-): PullRequestNode {
+function makeNode(number: number, reviews: ReviewConnection): PullRequestNode {
   return {
     number,
     title: `Widget change #${number}`,
@@ -44,9 +33,9 @@ function makeNode(
     closedAt: "2026-03-05T09:00:00Z",
     isDraft: false,
     author: { login: "erin" },
-    timelineItems: { nodes: readyForReviewEvents },
+    timelineItems: { nodes: [] },
     reviews,
-    comments,
+    comments: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }
 
@@ -72,47 +61,6 @@ describe("mergeReviewPages", () => {
       ...inline,
       ...remaining,
     ]);
-  });
-});
-
-describe("toPullRequest", () => {
-  test("keeps the shared PullRequest shape and drops the nested pageInfo", () => {
-    const pullRequest = toPullRequest(makeNode(7, makeConnection(inline, "cursor-2")), [
-      ...inline,
-      ...remaining,
-    ]);
-
-    expect(Object.keys(pullRequest)).toEqual([
-      "number",
-      "title",
-      "state",
-      "url",
-      "createdAt",
-      "updatedAt",
-      "mergedAt",
-      "closedAt",
-      "isDraft",
-      "author",
-      "readyForReviewAt",
-      "reviews",
-      "comments",
-    ]);
-    expect(pullRequest.reviews).toEqual({ nodes: [...inline, ...remaining] });
-    expect(pullRequest.comments).toEqual(comments);
-  });
-
-  test("takes readyForReviewAt from the first ready-for-review event", () => {
-    const node = makeNode(7, makeConnection(inline, null, false), [
-      { createdAt: "2026-03-02T08:00:00Z" },
-    ]);
-
-    expect(toPullRequest(node, inline).readyForReviewAt).toBe("2026-03-02T08:00:00Z");
-  });
-
-  test("sets readyForReviewAt to null when the PR was never a draft", () => {
-    const node = makeNode(7, makeConnection(inline, null, false));
-
-    expect(toPullRequest(node, inline).readyForReviewAt).toBeNull();
   });
 });
 
@@ -160,7 +108,7 @@ describe("resolveReviews", () => {
     expect(result.map((item) => item.kind)).toEqual(["complete", "partial", "complete"]);
     expect(result[1]).toEqual({
       kind: "partial",
-      pullRequest: toPullRequest(overflowA, inline),
+      pullRequest: toPullRequest({ repo: REPO, node: overflowA, reviews: inline }),
       reason: `Failed to fetch complete reviews for ${REPO}#2: boom`,
     });
     expect(result[2].pullRequest.reviews.nodes).toEqual([...inline, ...remaining]);

@@ -1,25 +1,13 @@
-export type ReviewState = "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING";
 export type TimeRangePreset = "week" | "month" | "quarter" | "year" | "all" | "custom";
 
-// `__typename` is "User" for people and "Bot" for GitHub Apps; GitHub also returns
-// "Mannequin", "Organization" and "EnterpriseUserAccount" in rare cases.
-export interface Actor {
-  login: string;
-  __typename: string;
-}
-
-export interface PRReview {
-  author: Actor | null;
-  state: ReviewState;
-  submittedAt: string | null;
-  body: string;
-}
-
-// A conversation comment on the PR (not an inline review comment).
-export interface PRComment {
-  author: Actor | null;
-  createdAt: string;
-}
+// The pull request model lives with its schemas and GraphQL fragment on the server.
+export type {
+  Actor,
+  PRComment,
+  PRReview,
+  PullRequest,
+  ReviewState,
+} from "../server/pull-request-model";
 
 // Comments arrive oldest first and only the earliest qualifying one matters, but bots
 // (CI, preview deploys, changesets) and the author often comment first, so one is not
@@ -27,29 +15,6 @@ export interface PRComment {
 // are fetched, the search page barely grows: on honojs/hono for September 2026 it was
 // 79.9 KB with 5, 81.6 KB with 10 and 83.5 KB with 20.
 export const COMMENTS_PAGE_SIZE = 10;
-
-export interface PullRequest {
-  number: number;
-  title: string;
-  state: "OPEN" | "CLOSED" | "MERGED";
-  url: string;
-  createdAt: string;
-  updatedAt: string;
-  mergedAt: string | null;
-  closedAt: string | null;
-  isDraft: boolean;
-  // When the PR first left draft; null if it never was a draft.
-  readyForReviewAt: string | null;
-  author: { login: string } | null;
-  reviews: {
-    nodes: PRReview[];
-  };
-  // The oldest COMMENTS_PAGE_SIZE comments at most; hasNextPage says whether more exist.
-  comments: {
-    pageInfo: { hasNextPage: boolean };
-    nodes: PRComment[];
-  };
-}
 
 export interface ReviewerStats {
   login: string;
