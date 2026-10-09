@@ -47,12 +47,12 @@ function parseAnalyzeIdleTimeoutSeconds(value: string | undefined): number {
   return parsed;
 }
 
-const { cacheDir, ttlHours } = getCacheConfig();
+const { cacheDir, ttlHours, prTtlDays } = getCacheConfig();
 const analyzeIdleTimeoutSeconds = parseAnalyzeIdleTimeoutSeconds(
   process.env.ANALYZE_IDLE_TIMEOUT_SECONDS,
 );
 
-log.info(`Local cache enabled at ${cacheDir} (TTL: ${ttlHours}h)`);
+log.info(`Local cache enabled at ${cacheDir} (listing TTL: ${ttlHours}h, PR TTL: ${prTtlDays}d)`);
 log.info(
   analyzeIdleTimeoutSeconds === 0
     ? "Analyze request idle timeout disabled"
@@ -123,13 +123,13 @@ app.get(
     );
 
     try {
-      const { fetchResult, cacheHit } = await loadPullRequests(
+      const { fetchResult, dataSource } = await loadPullRequests(
         { repos, label, since, until },
         { skipCache },
       );
       const { prs, matchingPRs, analyzedPRs, isComplete, partialReasons } = fetchResult;
       log.info(
-        `Analyzing ${analyzedPRs} PRs from ${cacheHit ? "cache" : "GitHub"} (total matching: ${matchingPRs})`,
+        `Analyzing ${analyzedPRs} PRs (total matching: ${matchingPRs}; listing from ${dataSource.listing}, ${dataSource.fetchedPRs} fetched, ${dataSource.reusedPRs} reused)`,
       );
 
       const result = analyze(prs, params);
@@ -137,6 +137,7 @@ app.get(
       result.analyzedPRs = analyzedPRs;
       result.isComplete = isComplete;
       result.partialReasons = partialReasons;
+      result.dataSource = dataSource;
 
       return c.json(result);
     } catch (err: unknown) {

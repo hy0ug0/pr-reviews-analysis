@@ -5,6 +5,7 @@ export type {
   ReviewerStats,
   AnalysisResult,
   AppDefaults,
+  DataSource,
   TimeRangePreset,
 } from "../../shared/types";
 

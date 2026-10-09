@@ -7,6 +7,7 @@ import { createLogger } from "./logger.ts";
 const log = createLogger("cache");
 
 const DEFAULT_CACHE_TTL_HOURS = 6;
+const DEFAULT_PR_CACHE_TTL_DAYS = 30;
 const DEFAULT_CACHE_DIR = resolve(process.cwd(), ".cache", "pr-reviews-analysis");
 
 interface CacheRecord<T> {
@@ -39,6 +40,28 @@ function parsePositiveInteger(value: string | undefined, fallback: number): numb
 
 const CACHE_TTL_HOURS = parsePositiveInteger(process.env.CACHE_TTL_HOURS, DEFAULT_CACHE_TTL_HOURS);
 const CACHE_TTL_MS = CACHE_TTL_HOURS * 60 * 60 * 1000;
+const PR_CACHE_TTL_DAYS = parsePositiveInteger(
+  process.env.PR_CACHE_TTL_DAYS,
+  DEFAULT_PR_CACHE_TTL_DAYS,
+);
+const PR_CACHE_TTL_MS = PR_CACHE_TTL_DAYS * 24 * 60 * 60 * 1000;
+
+// "listing" entries follow CACHE_TTL_HOURS. "pullRequest" entries stay valid while their
+// updatedAt matches GitHub, so they follow the longer PR_CACHE_TTL_DAYS.
+export type CacheTtl = "listing" | "pullRequest";
+
+function ttlMs(ttl: CacheTtl): number {
+  switch (ttl) {
+    case "listing":
+      return CACHE_TTL_MS;
+    case "pullRequest":
+      return PR_CACHE_TTL_MS;
+    default: {
+      const _exhaustive: never = ttl;
+      return _exhaustive;
+    }
+  }
+}
 
 const CACHE_DIR = process.env.CACHE_DIR
   ? resolve(process.cwd(), process.env.CACHE_DIR)
@@ -105,7 +128,7 @@ export async function readCache<T>(key: string, schema: z.ZodType<T>): Promise<T
   return value.data;
 }
 
-export async function writeCache<T>(key: string, value: T): Promise<void> {
+export async function writeCache<T>(key: string, value: T, ttl: CacheTtl): Promise<void> {
   await mkdir(CACHE_DIR, { recursive: true });
 
   const filePath = getCacheFilePath(key);
@@ -115,7 +138,7 @@ export async function writeCache<T>(key: string, value: T): Promise<void> {
   const now = Date.now();
   const payload: CacheRecord<T> = {
     cachedAt: new Date(now).toISOString(),
-    expiresAt: new Date(now + CACHE_TTL_MS).toISOString(),
+    expiresAt: new Date(now + ttlMs(ttl)).toISOString(),
     value,
   };
 
@@ -132,6 +155,6 @@ export async function writeCache<T>(key: string, value: T): Promise<void> {
   }
 }
 
-export function getCacheConfig(): { cacheDir: string; ttlHours: number } {
-  return { cacheDir: CACHE_DIR, ttlHours: CACHE_TTL_HOURS };
+export function getCacheConfig(): { cacheDir: string; ttlHours: number; prTtlDays: number } {
+  return { cacheDir: CACHE_DIR, ttlHours: CACHE_TTL_HOURS, prTtlDays: PR_CACHE_TTL_DAYS };
 }

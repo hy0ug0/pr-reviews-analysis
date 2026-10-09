@@ -42,6 +42,7 @@ function makePR({
     state: "MERGED",
     url: `https://github.com/${REPO}/pull/${number}`,
     createdAt: "2026-03-01T09:00:00Z",
+    updatedAt: "2026-03-20T09:00:00Z",
     mergedAt: "2026-03-20T09:00:00Z",
     closedAt: "2026-03-20T09:00:00Z",
     author: author === null ? null : { login: author },

@@ -14,6 +14,7 @@ export interface PullRequest {
   state: "OPEN" | "CLOSED" | "MERGED";
   url: string;
   createdAt: string;
+  updatedAt: string;
   mergedAt: string | null;
   closedAt: string | null;
   author: { login: string } | null;
@@ -41,6 +42,17 @@ export interface AnalysisResult {
   avgReviewsPerPR: number;
   reviewerStats: ReviewerStats[];
   timeRange: { since: string; until: string };
+  dataSource?: DataSource;
+}
+
+// Where the data behind an analysis came from. `listing` says whether the PR list for the
+// query was read from the cache or searched on GitHub; the counts split the listed PRs
+// between those fetched from GitHub on this request and those reused from the PR cache.
+export interface DataSource {
+  listing: "cache" | "github";
+  listedAt: string;
+  fetchedPRs: number;
+  reusedPRs: number;
 }
 
 export interface AnalyzeParams {

@@ -13,20 +13,20 @@ export interface ReviewConnection {
   nodes: PRReview[];
 }
 
-// A PR node from PR_SEARCH_QUERY, carrying the first page of its reviews.
-export interface SearchPullRequestNode extends Omit<PullRequest, "reviews"> {
+// A PR node selected with the PullRequestFields fragment, carrying the first page of its
+// reviews.
+export interface PullRequestNode extends Omit<PullRequest, "reviews"> {
   reviews: ReviewConnection;
 }
 
 // Fetches the review pages that follow `pr.reviews.pageInfo.endCursor`,
 // or every review when that cursor is null.
-export type FetchReviewContinuation = (pr: SearchPullRequestNode) => Promise<PRReview[]>;
+export type FetchReviewContinuation = (pr: PullRequestNode) => Promise<PRReview[]>;
 
-export interface ResolvedReviews {
-  prs: PullRequest[];
-  isComplete: boolean;
-  partialReasons: string[];
-}
+// "partial": the continuation failed, so `pullRequest` holds only the inline reviews.
+export type ResolvedPullRequest =
+  | { kind: "complete"; pullRequest: PullRequest }
+  | { kind: "partial"; pullRequest: PullRequest; reason: string };
 
 // `remaining` holds the pages fetched from the inline connection's endCursor.
 export function mergeReviewPages(inline: ReviewConnection, remaining: PRReview[]): PRReview[] {
@@ -36,7 +36,7 @@ export function mergeReviewPages(inline: ReviewConnection, remaining: PRReview[]
 }
 
 // Drops the nested pageInfo so the result matches the shared PullRequest shape.
-export function toPullRequest(node: SearchPullRequestNode, reviews: PRReview[]): PullRequest {
+export function toPullRequest(node: PullRequestNode, reviews: PRReview[]): PullRequest {
   const { reviews: _connection, ...pullRequest } = node;
   return {
     ...pullRequest,
@@ -74,8 +74,16 @@ export async function mapWithConcurrency<T, R>(
   });
 }
 
+// Caps a list of partial fetch reasons so the response stays readable.
+export function uniqueReasons(reasons: string[]): string[] {
+  const unique = Array.from(new Set(reasons.filter(Boolean)));
+  if (unique.length <= 5) return unique;
+  const omitted = unique.length - 4;
+  return [...unique.slice(0, 4), `${omitted} additional partial fetch issue(s) omitted.`];
+}
+
 // Completes the reviews of PRs whose inline page has more after it, keeping PR order.
-// A failed continuation keeps the inline reviews and marks the result partial.
+// A failed continuation keeps the inline reviews and marks that PR partial.
 export async function resolveReviews({
   repo,
   prNodes,
@@ -83,10 +91,10 @@ export async function resolveReviews({
   concurrency,
 }: {
   repo: string;
-  prNodes: SearchPullRequestNode[];
+  prNodes: PullRequestNode[];
   fetchContinuation: FetchReviewContinuation;
   concurrency: number;
-}): Promise<ResolvedReviews> {
+}): Promise<ResolvedPullRequest[]> {
   const overflowPRs = prNodes.filter((pr) => pr.reviews.pageInfo.hasNextPage);
   log.info(
     `${overflowPRs.length}/${prNodes.length} PRs in ${repo} need extra review pages (concurrency=${concurrency})`,
@@ -95,7 +103,7 @@ export async function resolveReviews({
   const continuedPRs = await mapWithConcurrency(
     overflowPRs,
     concurrency,
-    async (pr): Promise<{ pullRequest: PullRequest; isComplete: boolean; reason?: string }> => {
+    async (pr): Promise<ResolvedPullRequest> => {
       try {
         const remaining = await fetchContinuation(pr);
         completedReviewFetches++;
@@ -109,8 +117,8 @@ export async function resolveReviews({
           );
         }
         return {
+          kind: "complete",
           pullRequest: toPullRequest(pr, mergeReviewPages(pr.reviews, remaining)),
-          isComplete: true,
         };
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "Unknown review fetch error";
@@ -119,8 +127,8 @@ export async function resolveReviews({
           `Review fetch failed for ${repo}#${pr.number} (${completedReviewFetches}/${overflowPRs.length}): ${message}`,
         );
         return {
+          kind: "partial",
           pullRequest: toPullRequest(pr, pr.reviews.nodes),
-          isComplete: false,
           reason: `Failed to fetch complete reviews for ${repo}#${pr.number}: ${message}`,
         };
       }
@@ -128,20 +136,11 @@ export async function resolveReviews({
   );
   const continuedByNumber = new Map(continuedPRs.map((item) => [item.pullRequest.number, item]));
 
-  const prs: PullRequest[] = [];
-  const partialReasons: string[] = [];
-  let isComplete = true;
-  for (const pr of prNodes) {
-    const item = continuedByNumber.get(pr.number) ?? {
-      pullRequest: toPullRequest(pr, pr.reviews.nodes),
-      isComplete: true,
-    };
-    prs.push(item.pullRequest);
-    if (!item.isComplete) {
-      isComplete = false;
-      if (item.reason) partialReasons.push(item.reason);
-    }
-  }
-
-  return { prs, isComplete, partialReasons };
+  return prNodes.map(
+    (pr) =>
+      continuedByNumber.get(pr.number) ?? {
+        kind: "complete",
+        pullRequest: toPullRequest(pr, pr.reviews.nodes),
+      },
+  );
 }
