@@ -92,6 +92,7 @@ function makePR({
     author: { login: author, __typename: "User" },
     reviews: { nodes: reviews },
     comments: { pageInfo: { hasNextPage: moreComments }, nodes: comments },
+    reviewRequests: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }
 

@@ -30,11 +30,11 @@ const SEARCH_PAGE_SIZE = 100;
 const REVIEW_PAGE_SIZE = 100;
 const SEARCH_HARD_LIMIT = 1000;
 const MAX_SEARCH_PAGES = SEARCH_HARD_LIMIT / SEARCH_PAGE_SIZE;
-// Measured on nodejs/node: one call takes about 1.6 s for 50 PRs and 2.4 s for 100 (1 point
-// each), and 664 cold PRs took the same wall time at both sizes. With the timeline and
-// comment fields planned for the fragment, 100 PRs take 7 to 8 s (3 points), close to
-// GitHub's 10 s query timeout, while 50 take about 4 s (2 points). 50 leaves that headroom.
-const PR_BATCH_SIZE = 50;
+// GitHub stops a query at about 10 s and answers 502 or 504. Without review request events,
+// 50 PRs took about 4 s (2 points). With them, 50 of the busiest PRs of nodejs/node and
+// microsoft/vscode took 10 to 11 s and timed out, while 25 take 3 to 7.5 s (1 point). The
+// cost per PR is the same at both sizes, 1 point per 25 PRs, so 25 only adds calls.
+const PR_BATCH_SIZE = 25;
 const FETCH_CONCURRENCY = 5;
 const GRAPHQL_MAX_ATTEMPTS = 3;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;

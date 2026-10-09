@@ -36,6 +36,7 @@ function rawNode(overrides: Record<string, unknown> = {}): Record<string, unknow
     timelineItems: { nodes: [] },
     reviews: { pageInfo: { hasNextPage: false, endCursor: "cursor-1" }, nodes: [review] },
     comments,
+    reviewRequestEvents: { pageInfo: { hasNextPage: false }, nodes: [] },
     ...overrides,
   };
 }
@@ -93,6 +94,21 @@ describe("pullRequestNodeSchema", () => {
     expect(node.comments.nodes).toEqual([]);
   });
 
+  test("rejects an unknown requested reviewer type rather than guessing", () => {
+    const reviewRequestEvents = {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          __typename: "ReviewRequestedEvent",
+          createdAt: "2026-03-01T10:00:00Z",
+          requestedReviewer: { __typename: "Organization", login: "acme" },
+        },
+      ],
+    };
+
+    expect(pullRequestNodeSchema.safeParse(rawNode({ reviewRequestEvents })).success).toBe(false);
+  });
+
   test("rejects a node with a missing or mistyped field", () => {
     expect(pullRequestNodeSchema.safeParse(rawNode({ updatedAt: undefined })).success).toBe(false);
     expect(pullRequestNodeSchema.safeParse(rawNode({ state: "DRAFT" })).success).toBe(false);
@@ -118,6 +134,7 @@ describe("toPullRequest", () => {
       "readyForReviewAt",
       "reviews",
       "comments",
+      "reviewRequests",
     ]);
     expect(pullRequest.repo).toBe(REPO);
     expect(pullRequest.reviews).toEqual({ nodes: [review] });
@@ -144,6 +161,79 @@ describe("toPullRequest", () => {
     expect(toPullRequest({ repo: REPO, node, reviews: [] }).readyForReviewAt).toBe(
       "2026-03-02T08:00:00Z",
     );
+  });
+
+  test("normalizes review request events, keeping hidden reviewers as null", () => {
+    const node = parseNode({
+      reviewRequestEvents: {
+        pageInfo: { hasNextPage: true },
+        nodes: [
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-03-01T10:00:00Z",
+            requestedReviewer: { __typename: "User", login: "alice" },
+          },
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-03-01T10:00:01Z",
+            requestedReviewer: { __typename: "Mannequin", login: "old-alice" },
+          },
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-03-01T10:00:02Z",
+            requestedReviewer: { __typename: "Bot", login: "copilot" },
+          },
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-03-01T10:00:03Z",
+            requestedReviewer: { __typename: "Team", combinedSlug: "acme/core" },
+          },
+          {
+            __typename: "ReviewRequestRemovedEvent",
+            createdAt: "2026-03-01T10:00:04Z",
+            requestedReviewer: { __typename: "EnterpriseTeam", combinedSlug: "acme-ent/ops" },
+          },
+          null,
+          {
+            __typename: "ReviewRequestedEvent",
+            createdAt: "2026-03-01T10:00:05Z",
+            requestedReviewer: null,
+          },
+        ],
+      },
+    });
+
+    expect(toPullRequest({ repo: REPO, node, reviews: [] }).reviewRequests).toEqual({
+      pageInfo: { hasNextPage: true },
+      nodes: [
+        {
+          kind: "requested",
+          createdAt: "2026-03-01T10:00:00Z",
+          reviewer: { kind: "user", login: "alice" },
+        },
+        {
+          kind: "requested",
+          createdAt: "2026-03-01T10:00:01Z",
+          reviewer: { kind: "user", login: "old-alice" },
+        },
+        {
+          kind: "requested",
+          createdAt: "2026-03-01T10:00:02Z",
+          reviewer: { kind: "bot", login: "copilot" },
+        },
+        {
+          kind: "requested",
+          createdAt: "2026-03-01T10:00:03Z",
+          reviewer: { kind: "team", slug: "acme/core" },
+        },
+        {
+          kind: "removed",
+          createdAt: "2026-03-01T10:00:04Z",
+          reviewer: { kind: "team", slug: "acme-ent/ops" },
+        },
+        { kind: "requested", createdAt: "2026-03-01T10:00:05Z", reviewer: null },
+      ],
+    });
   });
 
   test("sets readyForReviewAt to null when the PR was never a draft", () => {

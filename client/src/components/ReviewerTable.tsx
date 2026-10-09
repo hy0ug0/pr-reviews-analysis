@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useCallback } from "react";
+import { formatDuration, pluralize } from "../../../shared/format";
 import type { ReviewerStats } from "../types";
 
 interface ReviewerTableProps {
@@ -6,6 +7,13 @@ interface ReviewerTableProps {
 }
 
 type SortKey = keyof ReviewerStats;
+
+// Below this many answered requests a p90 is close to the slowest single response, so it is
+// dimmed.
+const MIN_SAMPLES_FOR_P90 = 5;
+
+const RESPONSE_TOOLTIP =
+  "Time from a review request, to the reviewer or one of their teams, until their next review or comment. Draft time doesn't count, and each re-request is a new round. n is the number of answered requests.";
 
 const columns: { key: SortKey; label: string; align: "left" | "right"; tooltip?: string }[] = [
   { key: "login", label: "Reviewer", align: "left" },
@@ -41,6 +49,18 @@ const columns: { key: SortKey; label: string; align: "left" | "right"; tooltip?:
     align: "right",
     tooltip: "Number of reviews submitted as a comment only (no approval or change request).",
   },
+  {
+    key: "responseP50Ms",
+    label: "Response p50",
+    align: "right",
+    tooltip: `Median response time. ${RESPONSE_TOOLTIP}`,
+  },
+  {
+    key: "responseP90Ms",
+    label: "p90",
+    align: "right",
+    tooltip: `90th percentile response time: 9 in 10 requests were answered faster. Dimmed with fewer than ${MIN_SAMPLES_FOR_P90} answered requests, where it is mostly the slowest one.`,
+  },
 ];
 
 function cellColor(key: SortKey) {
@@ -53,16 +73,22 @@ function cellColor(key: SortKey) {
       return "font-medium text-amber-600 dark:text-amber-400";
     case "comments":
       return "font-medium text-sky-600 dark:text-sky-400";
+    // Darker than the counts, so a dimmed p90 stands apart at a readable contrast.
+    case "responseP50Ms":
+    case "responseP90Ms":
+      return "text-gray-900 dark:text-slate-100";
     default:
       return "text-gray-600 dark:text-slate-300";
   }
 }
 
+// Nulls (no response sample) sort last in both directions.
 function compareStats(
   a: ReviewerStats[SortKey],
   b: ReviewerStats[SortKey],
   sortAsc: boolean,
 ): number {
+  if (a === null || b === null) return (a === null ? 1 : 0) - (b === null ? 1 : 0);
   if (typeof a === "string" && typeof b === "string") {
     return sortAsc ? a.localeCompare(b) : b.localeCompare(a);
   }
@@ -70,6 +96,48 @@ function compareStats(
     return sortAsc ? a - b : b - a;
   }
   return 0;
+}
+
+// Minutes with one decimal; empty without a sample.
+function toCsvMinutes(ms: number | null): string {
+  return ms === null ? "" : (ms / 60_000).toFixed(1);
+}
+
+type ResponseKey = "responseP50Ms" | "responseP90Ms";
+
+function isResponseKey(key: SortKey): key is ResponseKey {
+  return key === "responseP50Ms" || key === "responseP90Ms";
+}
+
+function ResponseCell({ stats, column }: { stats: ReviewerStats; column: ResponseKey }) {
+  const value = stats[column];
+  if (value === null) {
+    return (
+      <span className="text-gray-400 dark:text-slate-500" title="No answered review request">
+        –
+      </span>
+    );
+  }
+  const answered = pluralize(stats.responseSamples, "answered request");
+  if (column === "responseP90Ms") {
+    const isNoisy = stats.responseSamples < MIN_SAMPLES_FOR_P90;
+    return (
+      <span
+        className={isNoisy ? "text-gray-500 dark:text-slate-400" : undefined}
+        title={isNoisy ? `Only ${answered}: too few for a stable p90` : answered}
+      >
+        {formatDuration(value)}
+      </span>
+    );
+  }
+  return (
+    <span title={answered}>
+      <span className="mr-2 text-xs text-gray-500 dark:text-slate-400">
+        n={stats.responseSamples}
+      </span>
+      {formatDuration(value)}
+    </span>
+  );
 }
 
 function exportCsv(stats: ReviewerStats[]) {
@@ -80,6 +148,9 @@ function exportCsv(stats: ReviewerStats[]) {
     "Approvals",
     "Changes Requested",
     "Comments",
+    "Response p50 (min)",
+    "Response p90 (min)",
+    "Answered Requests",
   ];
   const rows = stats.map((s) => [
     s.login,
@@ -88,6 +159,9 @@ function exportCsv(stats: ReviewerStats[]) {
     s.approvals,
     s.changesRequested,
     s.comments,
+    toCsvMinutes(s.responseP50Ms),
+    toCsvMinutes(s.responseP90Ms),
+    s.responseSamples,
   ]);
   const csv = [headers, ...rows].map((r) => r.join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
@@ -211,7 +285,7 @@ export function ReviewerTable({ stats }: ReviewerTableProps) {
                 <th
                   key={col.key}
                   onClick={() => handleSort(col.key)}
-                  className={`px-6 py-3 text-xs font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors ${
+                  className={`px-6 py-3 whitespace-nowrap text-xs font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors ${
                     col.align === "right" ? "text-right" : "text-left"
                   }`}
                 >
@@ -256,9 +330,13 @@ export function ReviewerTable({ stats }: ReviewerTableProps) {
                 {columns.slice(1).map((col) => (
                   <td
                     key={col.key}
-                    className={`px-6 py-3 whitespace-nowrap text-right text-sm ${cellColor(col.key)}`}
+                    className={`px-6 py-3 whitespace-nowrap text-right text-sm tabular-nums ${cellColor(col.key)}`}
                   >
-                    {s[col.key]}
+                    {isResponseKey(col.key) ? (
+                      <ResponseCell stats={s} column={col.key} />
+                    ) : (
+                      s[col.key]
+                    )}
                   </td>
                 ))}
               </tr>

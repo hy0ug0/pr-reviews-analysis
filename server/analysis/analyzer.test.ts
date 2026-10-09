@@ -48,6 +48,7 @@ function makePR({
     author: author === null ? null : { login: author, __typename: authorType },
     reviews: { nodes: reviews },
     comments: { pageInfo: { hasNextPage: false }, nodes: [] },
+    reviewRequests: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }
 
@@ -231,6 +232,9 @@ describe("aggregation", () => {
         changesRequested: 1,
         comments: 2,
         prsReviewed: 1,
+        responseP50Ms: null,
+        responseP90Ms: null,
+        responseSamples: 0,
       },
     ]);
   });
@@ -437,5 +441,40 @@ describe("bots", () => {
 
   test("with a team filter, does not report bot reviews the filter skips anyway", () => {
     expect(run(prs, { teamMembers: ["bob"] }).excludedBots).toEqual({ prs: 2, reviews: 0 });
+  });
+});
+
+describe("analyze reviewer response time", () => {
+  const requestedAt = "2026-03-15T10:00:00Z";
+  const pr: PullRequest = {
+    ...makePR({ reviews: [makeReview({ by: "Bob", submittedAt: "2026-03-15T12:00:00Z" })] }),
+    reviewRequests: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        { kind: "requested", createdAt: requestedAt, reviewer: { kind: "user", login: "bob" } },
+        { kind: "requested", createdAt: requestedAt, reviewer: { kind: "user", login: "carol" } },
+      ],
+    },
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        { author: { login: "carol", __typename: "User" }, createdAt: "2026-03-15T11:00:00Z" },
+      ],
+    },
+  };
+
+  test("adds each reviewer's response percentiles to their row", () => {
+    expect(run([pr]).reviewerStats).toEqual([
+      expect.objectContaining({
+        login: "Bob",
+        responseP50Ms: 2 * 60 * 60 * 1000,
+        responseP90Ms: 2 * 60 * 60 * 1000,
+        responseSamples: 1,
+      }),
+    ]);
+  });
+
+  test("gives no row to someone who only answered by comment", () => {
+    expect(logins(run([pr]))).toEqual(["Bob"]);
   });
 });

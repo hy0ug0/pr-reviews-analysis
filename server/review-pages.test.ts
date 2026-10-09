@@ -36,6 +36,7 @@ function makeNode(number: number, reviews: ReviewConnection): PullRequestNode {
     timelineItems: { nodes: [] },
     reviews,
     comments: { pageInfo: { hasNextPage: false }, nodes: [] },
+    reviewRequestEvents: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }
 

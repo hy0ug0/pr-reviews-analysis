@@ -6,6 +6,8 @@ export type {
   PRComment,
   PRReview,
   PullRequest,
+  RequestedReviewer,
+  ReviewRequestEvent,
   ReviewState,
 } from "../server/pull-request-model";
 
@@ -23,6 +25,11 @@ export interface ReviewerStats {
   changesRequested: number;
   comments: number;
   prsReviewed: number;
+  // Time from a review request (to the reviewer or one of their teams) to their next review
+  // or comment, over every request they answered; null without a sample.
+  responseP50Ms: number | null;
+  responseP90Ms: number | null;
+  responseSamples: number;
 }
 
 export interface DurationBucket {

@@ -125,6 +125,17 @@ function makePR(number: number, updatedAt = "2026-03-20T09:00:00Z"): PullRequest
         { author: null, createdAt: "2026-03-03T10:00:00Z" },
       ],
     },
+    reviewRequests: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          kind: "requested",
+          createdAt: "2026-03-02T09:00:00Z",
+          reviewer: { kind: "user", login: "bob" },
+        },
+        { kind: "requested", createdAt: "2026-03-02T09:00:00Z", reviewer: null },
+      ],
+    },
   };
 }
 
@@ -195,7 +206,7 @@ describe("cache keys", () => {
       /^pull-request-listing-v3-[0-9a-f]{64}$/,
     );
     expect(buildPullRequestCacheKey({ repo: REPO, number: 1 })).toMatch(
-      /^pull-request-v5-[0-9a-f]{64}$/,
+      /^pull-request-v6-[0-9a-f]{64}$/,
     );
   });
 

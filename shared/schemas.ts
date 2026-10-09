@@ -116,6 +116,9 @@ export const reviewerStatsSchema = z.object({
   changesRequested: z.number(),
   comments: z.number(),
   prsReviewed: z.number(),
+  responseP50Ms: z.number().nullable(),
+  responseP90Ms: z.number().nullable(),
+  responseSamples: z.number(),
 });
 
 export const firstResponseSummarySchema = z.object({

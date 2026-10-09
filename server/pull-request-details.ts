@@ -3,10 +3,15 @@ import { createLogger } from "./logger.ts";
 import {
   describeSchemaError,
   pullRequestNodeSchema,
+  REVIEW_REQUEST_EVENTS_PAGE_SIZE,
   type PullRequest,
   type PullRequestNode,
 } from "./pull-request-model.ts";
-import { resolveReviews, type FetchReviewContinuation } from "./review-pages.ts";
+import {
+  resolveReviews,
+  type FetchReviewContinuation,
+  type ResolvedPullRequest,
+} from "./review-pages.ts";
 
 const log = createLogger("fetch");
 
@@ -20,7 +25,8 @@ export function pullRequestKey({ repo, number }: PullRequestRef): string {
   return `${repo}#${number}`;
 }
 
-// "partial": only the inline reviews could be fetched. "failed": no data at all.
+// "partial": the data is incomplete (only the inline reviews could be fetched, or the PR has
+// more review request events than one page). "failed": no data at all.
 export type FetchedPullRequest =
   | { kind: "complete"; pullRequest: PullRequest }
   | { kind: "partial"; pullRequest: PullRequest; reason: string }
@@ -115,6 +121,23 @@ export function readPullRequestBatch({
   });
 }
 
+// The review request history past the first page is never fetched, so a PR with more is
+// served once but never cached as complete.
+function flagTruncatedReviewRequests(
+  repo: string,
+  resolved: ResolvedPullRequest,
+): FetchedPullRequest {
+  const { pullRequest } = resolved;
+  if (resolved.kind === "partial" || !pullRequest.reviewRequests.pageInfo.hasNextPage) {
+    return resolved;
+  }
+  return {
+    kind: "partial",
+    pullRequest,
+    reason: `${repo}#${pullRequest.number} has more than ${REVIEW_REQUEST_EVENTS_PAGE_SIZE} review request events; reviewer response times use the first ${REVIEW_REQUEST_EVENTS_PAGE_SIZE}.`,
+  };
+}
+
 function chunk<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let index = 0; index < items.length; index += size) {
@@ -194,7 +217,7 @@ export async function fetchPullRequestsInBatches({
   return items.map((item): FetchedPullRequest => {
     switch (item.kind) {
       case "node":
-        return resolved[resolvedIndex++];
+        return flagTruncatedReviewRequests(repo, resolved[resolvedIndex++]);
       case "failed":
         return item;
       default: {

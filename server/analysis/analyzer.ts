@@ -5,6 +5,7 @@ import type {
   ReviewerStats,
 } from "../../shared/types.ts";
 import { summarizeFirstResponse } from "./first-response.ts";
+import { NO_REVIEWER_RESPONSES, summarizeReviewerResponses } from "./reviewer-response.ts";
 import {
   isExcludedBotPR,
   isParticipant,
@@ -49,6 +50,7 @@ export function analyze(loadedPRs: PullRequest[], options: AnalyzeOptions): Anal
           changesRequested: 0,
           comments: 0,
           prsReviewed: 0,
+          ...NO_REVIEWER_RESPONSES,
         });
       }
 
@@ -76,9 +78,18 @@ export function analyze(loadedPRs: PullRequest[], options: AnalyzeOptions): Anal
     }
   }
 
-  const reviewerStats = Array.from(reviewerMap.values()).sort(
-    (a, b) => b.totalReviews - a.totalReviews,
-  );
+  // Rows stay those of reviewers with a counted review in range: someone who only answered
+  // requests by comment gets no row.
+  const responses = summarizeReviewerResponses({
+    prs,
+    teamMembers: options.teamMembers,
+    includeBots: options.includeBots,
+    botLogins: options.botLogins,
+  });
+  const reviewerStats = Array.from(reviewerMap.values(), (stats) => ({
+    ...stats,
+    ...responses.get(stats.login.toLowerCase()),
+  })).sort((a, b) => b.totalReviews - a.totalReviews);
 
   return {
     countedPRs: prs.length,
