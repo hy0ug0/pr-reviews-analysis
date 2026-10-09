@@ -3,7 +3,6 @@ import { zValidator } from "@hono/zod-validator";
 import { execFileSync } from "node:child_process";
 import {
   fetchLabelSuggestions,
-  fetchPullRequests,
   fetchRepositorySuggestions,
   fetchUserSuggestions,
 } from "./github.ts";
@@ -11,7 +10,8 @@ import { analyze } from "./analyzer.ts";
 import { createLogger } from "./logger.ts";
 import type { AnalyzeParams } from "../shared/types.ts";
 import { analyzeQuerySchema } from "../shared/schemas.ts";
-import { buildCacheKey, getCacheConfig, readCache, writeCache } from "./cache.ts";
+import { getCacheConfig } from "./cache.ts";
+import { loadPullRequests } from "./pull-requests.ts";
 
 const log = createLogger("server");
 
@@ -117,37 +117,26 @@ app.get(
       : undefined;
 
     const params: AnalyzeParams = { repos, label, since, until, teamMembers };
-    const cacheKey = buildCacheKey(params);
 
     log.info(
       `Analyzing: ${repos.join(", ")}${label ? ` [label: ${label}]` : ""}${since ? ` from ${since}` : ""}${until ? ` to ${until}` : ""}${skipCache ? " [skip cache]" : ""}`,
     );
 
     try {
-      if (!skipCache) {
-        const cached = await readCache(cacheKey);
-        if (cached) {
-          log.info(`Cache hit for key ${cacheKey.slice(0, 10)}`);
-          return c.json(cached);
-        }
-        log.info(`Cache miss for key ${cacheKey.slice(0, 10)}`);
-      }
-
-      const { prs, matchingPRs, analyzedPRs, isComplete, partialReasons } = await fetchPullRequests(
-        repos,
-        label,
-        since,
-        until,
+      const { fetchResult, cacheHit } = await loadPullRequests(
+        { repos, label, since, until },
+        { skipCache },
       );
-      log.info(`Fetched ${analyzedPRs} PRs (total matching: ${matchingPRs})`);
+      const { prs, matchingPRs, analyzedPRs, isComplete, partialReasons } = fetchResult;
+      log.info(
+        `Analyzing ${analyzedPRs} PRs from ${cacheHit ? "cache" : "GitHub"} (total matching: ${matchingPRs})`,
+      );
 
       const result = analyze(prs, params);
       result.matchingPRs = matchingPRs;
       result.analyzedPRs = analyzedPRs;
       result.isComplete = isComplete;
       result.partialReasons = partialReasons;
-
-      await writeCache(cacheKey, result);
 
       return c.json(result);
     } catch (err: unknown) {

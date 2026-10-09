@@ -29,8 +29,8 @@ cp .env.example .env
 - `DEFAULT_REPOS`: pre-filled repositories (`owner/repo`, comma-separated)
 - `DEFAULT_LABEL`: pre-filled label filter
 - `DEFAULT_TEAM`: pre-filled team members (comma-separated GitHub handles)
-- `CACHE_TTL_HOURS`: cache time-to-live in hours
-- `CACHE_DIR`: cache directory path
+- `CACHE_TTL_HOURS`: how long, in hours, to keep pull request data fetched from GitHub (default `6`). The cache key covers repositories, label and date range. The team filter applies after the cache, so changing the team reuses the cached data. Tick "Skip cache" in the form to refetch.
+- `CACHE_DIR`: cache directory path (default `.cache/pr-reviews-analysis`)
 - `ANALYZE_IDLE_TIMEOUT_SECONDS`: Bun idle timeout for `/api/analyze`, in seconds. Defaults to `0`, which disables the timeout for this long-running local route. Finite values must be `1..255`.
 
 ## Run
