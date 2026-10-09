@@ -67,6 +67,13 @@ export const reviewerStatsSchema = z.object({
   prsReviewed: z.number(),
 });
 
+export const dataSourceSchema = z.object({
+  listing: z.enum(["cache", "github"]),
+  listedAt: z.string(),
+  fetchedPRs: z.number(),
+  reusedPRs: z.number(),
+});
+
 export const analysisResultSchema = z.object({
   matchingPRs: z.number(),
   analyzedPRs: z.number(),
@@ -77,4 +84,5 @@ export const analysisResultSchema = z.object({
   avgReviewsPerPR: z.number(),
   reviewerStats: z.array(reviewerStatsSchema),
   timeRange: z.object({ since: z.string(), until: z.string() }),
+  dataSource: dataSourceSchema.optional(),
 });

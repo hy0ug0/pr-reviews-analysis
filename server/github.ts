@@ -1,11 +1,17 @@
 import { execFile } from "node:child_process";
-import type { AppSuggestion, PRReview, PullRequest } from "../shared/types.ts";
+import type { AppSuggestion, PRReview } from "../shared/types.ts";
 import { createLogger } from "./logger.ts";
 import {
-  resolveReviews,
+  fetchPullRequestsInBatches,
+  pullRequestKey,
+  type FetchedPullRequest,
+  type PullRequestRef,
+} from "./pull-request-details.ts";
+import {
+  uniqueReasons,
   type PageInfo,
+  type PullRequestNode,
   type ReviewConnection,
-  type SearchPullRequestNode,
 } from "./review-pages.ts";
 
 const log = createLogger("fetch");
@@ -15,12 +21,51 @@ const REVIEW_PAGE_SIZE = 100;
 const INLINE_REVIEW_PAGE_SIZE = 50;
 const SEARCH_HARD_LIMIT = 1000;
 const MAX_SEARCH_PAGES = SEARCH_HARD_LIMIT / SEARCH_PAGE_SIZE;
-const REVIEW_FETCH_CONCURRENCY = 5;
+// Measured on nodejs/node: one call takes about 1.6 s for 50 PRs and 2.4 s for 100 (1 point
+// each), and 664 cold PRs took the same wall time at both sizes. With the timeline and
+// comment fields planned for the fragment, 100 PRs take 7 to 8 s (3 points), close to
+// GitHub's 10 s query timeout, while 50 take about 4 s (2 points). 50 leaves that headroom.
+const PR_BATCH_SIZE = 50;
+const FETCH_CONCURRENCY = 5;
 const GRAPHQL_MAX_ATTEMPTS = 3;
 const GITHUB_EPOCH_DATE = "2008-01-01";
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
-const PR_SEARCH_QUERY = `
+// The review fields every query that returns reviews selects.
+const REVIEW_FIELDS = `
+fragment ReviewFields on PullRequestReview {
+  author { login }
+  state
+  submittedAt
+  body
+}`;
+
+// The PR fields every query that returns pull request data selects. A new field goes here,
+// in PullRequest (shared/types.ts) and in pullRequestSchema (pull-requests.ts), with a
+// CACHE_VERSION bump.
+const PULL_REQUEST_FIELDS = `
+fragment PullRequestFields on PullRequest {
+  number
+  title
+  state
+  url
+  createdAt
+  updatedAt
+  mergedAt
+  closedAt
+  author { login }
+  reviews(first: ${INLINE_REVIEW_PAGE_SIZE}) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes { ...ReviewFields }
+  }
+}
+${REVIEW_FIELDS}`;
+
+// Lists PRs without their data: updatedAt tells which cached PRs are still current.
+const PR_LISTING_QUERY = `
 query($searchQuery: String!, $first: Int!, $after: String) {
   search(first: $first, query: $searchQuery, type: ISSUE, after: $after) {
     issueCount
@@ -31,25 +76,7 @@ query($searchQuery: String!, $first: Int!, $after: String) {
     nodes {
       ... on PullRequest {
         number
-        title
-        state
-        url
-        createdAt
-        mergedAt
-        closedAt
-        author { login }
-        reviews(first: ${INLINE_REVIEW_PAGE_SIZE}) {
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-          nodes {
-            author { login }
-            state
-            submittedAt
-            body
-          }
-        }
+        updatedAt
       }
     }
   }
@@ -64,16 +91,33 @@ query($owner: String!, $name: String!, $number: Int!, $first: Int!, $after: Stri
           hasNextPage
           endCursor
         }
-        nodes {
-          author { login }
-          state
-          submittedAt
-          body
-        }
+        nodes { ...ReviewFields }
       }
     }
   }
-}`;
+}
+${REVIEW_FIELDS}`;
+
+// One aliased pullRequest field per number, so a single call fetches a whole batch.
+function buildPullRequestBatchQuery(numbers: number[]): string {
+  const fields = numbers
+    .map(
+      (number) =>
+        `    ${batchAlias(number)}: pullRequest(number: ${number}) { ...PullRequestFields }`,
+    )
+    .join("\n");
+  return `
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+${fields}
+  }
+}
+${PULL_REQUEST_FIELDS}`;
+}
+
+function batchAlias(number: number): string {
+  return `pr${number}`;
+}
 
 const REPOSITORY_SEARCH_QUERY = `
 query($searchQuery: String!, $first: Int!) {
@@ -130,12 +174,21 @@ query($searchQuery: String!, $first: Int!) {
   }
 }`;
 
-interface SearchResponse {
+interface ListedPullRequestNode {
+  number: number;
+  updatedAt: string;
+}
+
+interface ListingResponse {
   search: {
     issueCount: number;
     pageInfo: PageInfo;
-    nodes: SearchPullRequestNode[];
+    nodes: ListedPullRequestNode[];
   };
+}
+
+interface PullRequestBatchResponse {
+  repository: Record<string, PullRequestNode | null> | null;
 }
 
 interface ReviewsResponse {
@@ -193,27 +246,25 @@ interface DateWindow {
 }
 
 // "split": the window matches more PRs than Search returns and can be halved.
-type FetchWindowResult =
+type ListWindowResult =
   | { kind: "split"; issueCount: number; halves: [DateWindow, DateWindow] }
   | {
-      kind: "fetched";
+      kind: "listed";
       issueCount: number;
-      prs: SearchPullRequestNode[];
+      prs: ListedPullRequestNode[];
       isComplete: boolean;
       partialReasons: string[];
     };
 
-interface RepoFetchResult {
-  prs: PullRequest[];
-  matchingPRs: number;
-  isComplete: boolean;
-  partialReasons: string[];
+export interface ListedPullRequest extends PullRequestRef {
+  updatedAt: string;
 }
 
-export interface PullRequestFetchResult {
-  prs: PullRequest[];
+// The PRs a search matches, without their data. isComplete and partialReasons cover the
+// search only, such as the 1000-result limit.
+export interface PullRequestListing {
+  prs: ListedPullRequest[];
   matchingPRs: number;
-  analyzedPRs: number;
   isComplete: boolean;
   partialReasons: string[];
 }
@@ -403,13 +454,6 @@ function splitWindow(window: DateWindow): [DateWindow, DateWindow] | null {
   ];
 }
 
-function uniqueReasons(reasons: string[]): string[] {
-  const unique = Array.from(new Set(reasons.filter(Boolean)));
-  if (unique.length <= 5) return unique;
-  const omitted = unique.length - 4;
-  return [...unique.slice(0, 4), `${omitted} additional partial fetch issue(s) omitted.`];
-}
-
 export async function fetchRepositorySuggestions(
   query: string,
   defaultRepos: string[] = [],
@@ -526,16 +570,16 @@ export async function fetchUserSuggestions(
   }
 }
 
-async function fetchWindowPullRequests(
+async function listWindowPullRequests(
   repo: string,
   label: string | undefined,
   window: DateWindow,
-): Promise<FetchWindowResult> {
+): Promise<ListWindowResult> {
   log.info(
-    `Searching PRs for ${repo} in window ${window.since}..${window.until}${label ? ` [label:${label}]` : ""}`,
+    `Listing PRs for ${repo} in window ${window.since}..${window.until}${label ? ` [label:${label}]` : ""}`,
   );
   const searchQuery = buildSearchQuery(repo, label, window.since, window.until);
-  const firstPage = await ghGraphqlWithRetry<SearchResponse>(PR_SEARCH_QUERY, {
+  const firstPage = await ghGraphqlWithRetry<ListingResponse>(PR_LISTING_QUERY, {
     searchQuery,
     first: SEARCH_PAGE_SIZE,
   });
@@ -544,7 +588,7 @@ async function fetchWindowPullRequests(
   let isComplete = true;
 
   if (issueCount > SEARCH_HARD_LIMIT) {
-    // Stop after page 1: the caller fetches each half instead.
+    // Stop after page 1: the caller lists each half instead.
     const halves = splitWindow(window);
     if (halves) return { kind: "split", issueCount, halves };
 
@@ -554,12 +598,12 @@ async function fetchWindowPullRequests(
     );
   }
 
-  const prs: SearchPullRequestNode[] = [...firstPage.search.nodes];
+  const prs: ListedPullRequestNode[] = [...firstPage.search.nodes];
   let hasNextPage = firstPage.search.pageInfo.hasNextPage;
   let cursor = firstPage.search.pageInfo.endCursor;
   let pagesFetched = 1;
   log.info(
-    `Window ${window.since}..${window.until}: fetched page 1 (${prs.length}/${issueCount} PR nodes loaded)`,
+    `Window ${window.since}..${window.until}: listed page 1 (${prs.length}/${issueCount} PRs)`,
   );
 
   while (hasNextPage) {
@@ -570,36 +614,67 @@ async function fetchWindowPullRequests(
       partialReasons.push(
         `GitHub Search limit reached for ${repo} (${window.since}..${window.until}); only first ${SEARCH_HARD_LIMIT} PRs were accessible in this window.`,
       );
-      return {
-        kind: "fetched",
-        issueCount,
-        prs,
-        isComplete: false,
-        partialReasons,
-      };
+      return { kind: "listed", issueCount, prs, isComplete: false, partialReasons };
     }
 
     const variables: Record<string, GraphqlVariable> = { searchQuery, first: SEARCH_PAGE_SIZE };
     if (cursor) variables.after = cursor;
-    const page = await ghGraphqlWithRetry<SearchResponse>(PR_SEARCH_QUERY, variables);
+    const page = await ghGraphqlWithRetry<ListingResponse>(PR_LISTING_QUERY, variables);
 
     prs.push(...page.search.nodes);
     hasNextPage = page.search.pageInfo.hasNextPage;
     cursor = page.search.pageInfo.endCursor;
     pagesFetched++;
     log.info(
-      `Window ${window.since}..${window.until}: fetched page ${pagesFetched} (${prs.length}/${issueCount} PR nodes loaded)`,
+      `Window ${window.since}..${window.until}: listed page ${pagesFetched} (${prs.length}/${issueCount} PRs)`,
     );
   }
 
-  log.info(`Completed window ${window.since}..${window.until}: ${prs.length} PR nodes fetched`);
-  return {
-    kind: "fetched",
-    issueCount,
-    prs,
-    isComplete,
-    partialReasons,
-  };
+  log.info(`Completed window ${window.since}..${window.until}: ${prs.length} PRs listed`);
+  return { kind: "listed", issueCount, prs, isComplete, partialReasons };
+}
+
+async function listRepoPullRequests(
+  repo: string,
+  label: string | undefined,
+  range: DateWindow,
+): Promise<PullRequestListing> {
+  log.info(`Starting repo listing for ${repo} in range ${range.since}..${range.until}`);
+  const windowsToList: DateWindow[] = [{ ...range }];
+  const partialReasons: string[] = [];
+  const seen = new Set<number>();
+  const prs: ListedPullRequest[] = [];
+  let matchingPRs = 0;
+  let isComplete = true;
+
+  while (windowsToList.length > 0) {
+    const window = windowsToList.pop()!;
+    const windowResult = await listWindowPullRequests(repo, label, window);
+
+    if (windowResult.kind === "split") {
+      const [left, right] = windowResult.halves;
+      log.info(
+        `Window ${window.since}..${window.until} has ${windowResult.issueCount} matches; splitting into ${left.since}..${left.until} and ${right.since}..${right.until}`,
+      );
+      windowsToList.push(right, left);
+      continue;
+    }
+
+    matchingPRs += windowResult.issueCount;
+    if (!windowResult.isComplete) isComplete = false;
+    partialReasons.push(...windowResult.partialReasons);
+
+    for (const pr of windowResult.prs) {
+      if (seen.has(pr.number)) continue;
+      seen.add(pr.number);
+      prs.push({ repo, number: pr.number, updatedAt: pr.updatedAt });
+    }
+  }
+
+  log.info(
+    `Completed repo listing for ${repo}: ${prs.length} PRs listed, matching ${matchingPRs}, complete=${isComplete}`,
+  );
+  return { prs, matchingPRs, isComplete, partialReasons };
 }
 
 async function fetchPullRequestReviews(
@@ -635,111 +710,79 @@ async function fetchPullRequestReviews(
   return reviews;
 }
 
-async function fetchRepoPullRequests(
-  repoInput: string,
-  label: string | undefined,
-  range: DateWindow,
-): Promise<RepoFetchResult> {
-  const repo = repoInput.trim();
-  if (!repo) {
-    return {
-      prs: [],
-      matchingPRs: 0,
-      isComplete: true,
-      partialReasons: [],
-    };
-  }
-
-  log.info(`Starting repo fetch for ${repo} in range ${range.since}..${range.until}`);
-  const windowsToFetch: DateWindow[] = [{ ...range }];
-  const partialReasons: string[] = [];
-  const dedupeSet = new Set<string>();
-  const prNodes: SearchPullRequestNode[] = [];
-  let matchingPRs = 0;
-  let isComplete = true;
-
-  while (windowsToFetch.length > 0) {
-    const window = windowsToFetch.pop()!;
-    log.info(`Processing window ${window.since}..${window.until} for ${repo}`);
-    const windowResult = await fetchWindowPullRequests(repo, label, window);
-
-    if (windowResult.kind === "split") {
-      const [left, right] = windowResult.halves;
-      log.info(
-        `Window ${window.since}..${window.until} has ${windowResult.issueCount} matches; splitting into ${left.since}..${left.until} and ${right.since}..${right.until}`,
-      );
-      windowsToFetch.push(right, left);
-      continue;
-    }
-
-    matchingPRs += windowResult.issueCount;
-    if (!windowResult.isComplete) isComplete = false;
-    partialReasons.push(...windowResult.partialReasons);
-
-    for (const pr of windowResult.prs) {
-      const key = `${repo}#${pr.number}`;
-      if (dedupeSet.has(key)) continue;
-      dedupeSet.add(key);
-      prNodes.push(pr);
-    }
-
-    log.info(
-      `Repo ${repo} progress: ${prNodes.length} unique PR nodes collected (${matchingPRs} total matches reported by GitHub)`,
-    );
-  }
-
-  const resolved = await resolveReviews({
-    repo,
-    prNodes,
-    fetchContinuation: (pr) =>
-      fetchPullRequestReviews(repo, pr.number, pr.reviews.pageInfo.endCursor),
-    concurrency: REVIEW_FETCH_CONCURRENCY,
-  });
-  if (!resolved.isComplete) isComplete = false;
-  partialReasons.push(...resolved.partialReasons);
-
-  log.info(
-    `Completed repo fetch for ${repo}: analyzed ${resolved.prs.length} PRs, matching ${matchingPRs}, complete=${isComplete}`,
+async function fetchPullRequestBatch(
+  repo: string,
+  numbers: number[],
+): Promise<Array<PullRequestNode | null>> {
+  const { owner, name } = parseRepo(repo);
+  const data = await ghGraphqlWithRetry<PullRequestBatchResponse>(
+    buildPullRequestBatchQuery(numbers),
+    { owner, name },
   );
-  return {
-    prs: resolved.prs,
-    matchingPRs,
-    isComplete,
-    partialReasons: uniqueReasons(partialReasons),
-  };
+  const repository = data.repository;
+  if (!repository) throw new Error(`Repository ${repo} was not found.`);
+  return numbers.map((number) => repository[batchAlias(number)] ?? null);
 }
 
-export async function fetchPullRequests(
-  repos: string[],
-  label?: string,
-  since?: string,
-  until?: string,
-): Promise<PullRequestFetchResult> {
-  const allPRs: PullRequest[] = [];
+// Lists the PRs created in the range. Oversized windows are split to get past the
+// 1000-result Search limit. Repos are expected normalized (see normalizeRepos).
+export async function listPullRequests({
+  repos,
+  label,
+  since,
+  until,
+}: {
+  repos: string[];
+  label?: string;
+  since?: string;
+  until?: string;
+}): Promise<PullRequestListing> {
+  const dateRange = normalizeDateRange(since, until);
+  log.info(
+    `Starting listing across ${repos.length} repos in range ${dateRange.since}..${dateRange.until}${label ? ` [label:${label}]` : ""}`,
+  );
+  const prs: ListedPullRequest[] = [];
   const partialReasons: string[] = [];
   let matchingPRs = 0;
   let isComplete = true;
-  const dateRange = normalizeDateRange(since, until);
-  log.info(
-    `Starting fetch across ${repos.length} repos in range ${dateRange.since}..${dateRange.until}${label ? ` [label:${label}]` : ""}`,
-  );
 
   for (const repo of repos) {
-    const repoResult = await fetchRepoPullRequests(repo, label, dateRange);
-    allPRs.push(...repoResult.prs);
-    matchingPRs += repoResult.matchingPRs;
-    if (!repoResult.isComplete) isComplete = false;
-    partialReasons.push(...repoResult.partialReasons);
+    const repoListing = await listRepoPullRequests(repo, label, dateRange);
+    prs.push(...repoListing.prs);
+    matchingPRs += repoListing.matchingPRs;
+    if (!repoListing.isComplete) isComplete = false;
+    partialReasons.push(...repoListing.partialReasons);
   }
 
-  log.info(
-    `Finished fetch across repos: analyzed ${allPRs.length} PRs, matching ${matchingPRs}, complete=${isComplete}`,
-  );
-  return {
-    prs: allPRs,
-    matchingPRs,
-    analyzedPRs: allPRs.length,
-    isComplete,
-    partialReasons: uniqueReasons(partialReasons),
-  };
+  return { prs, matchingPRs, isComplete, partialReasons: uniqueReasons(partialReasons) };
+}
+
+// Fetches each PR's data and reviews in batches, one repo at a time. The map is keyed by
+// pullRequestKey and has one entry per requested PR.
+export async function fetchPullRequestDetails(
+  refs: PullRequestRef[],
+): Promise<Map<string, FetchedPullRequest>> {
+  const numbersByRepo = new Map<string, number[]>();
+  for (const { repo, number } of refs) {
+    const numbers = numbersByRepo.get(repo) ?? [];
+    numbers.push(number);
+    numbersByRepo.set(repo, numbers);
+  }
+
+  const fetched = new Map<string, FetchedPullRequest>();
+  for (const [repo, numbers] of numbersByRepo) {
+    const results = await fetchPullRequestsInBatches({
+      repo,
+      numbers,
+      batchSize: PR_BATCH_SIZE,
+      concurrency: FETCH_CONCURRENCY,
+      fetchBatch: (batch) => fetchPullRequestBatch(repo, batch),
+      fetchContinuation: (pr) =>
+        fetchPullRequestReviews(repo, pr.number, pr.reviews.pageInfo.endCursor),
+    });
+    numbers.forEach((number, index) => {
+      fetched.set(pullRequestKey({ repo, number }), results[index]);
+    });
+  }
+  return fetched;
 }

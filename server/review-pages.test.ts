@@ -6,7 +6,7 @@ import {
   toPullRequest,
   type FetchReviewContinuation,
   type ReviewConnection,
-  type SearchPullRequestNode,
+  type PullRequestNode,
 } from "./review-pages.ts";
 
 const REPO = "acme/widgets";
@@ -23,13 +23,14 @@ function makeConnection(
   return { pageInfo: { hasNextPage, endCursor }, nodes };
 }
 
-function makeNode(number: number, reviews: ReviewConnection): SearchPullRequestNode {
+function makeNode(number: number, reviews: ReviewConnection): PullRequestNode {
   return {
     number,
     title: `Widget change #${number}`,
     state: "MERGED",
     url: `https://github.com/${REPO}/pull/${number}`,
     createdAt: "2026-03-01T09:00:00Z",
+    updatedAt: "2026-03-05T09:00:00Z",
     mergedAt: "2026-03-05T09:00:00Z",
     closedAt: "2026-03-05T09:00:00Z",
     author: { login: "erin" },
@@ -75,6 +76,7 @@ describe("toPullRequest", () => {
       "state",
       "url",
       "createdAt",
+      "updatedAt",
       "mergedAt",
       "closedAt",
       "author",
@@ -105,14 +107,13 @@ describe("resolveReviews", () => {
 
     expect(fetchedCursors).toHaveLength(2);
     expect(fetchedCursors).toEqual(expect.arrayContaining(["cursor-2", "cursor-3"]));
-    expect(result.prs.map((pr) => pr.number)).toEqual([2, 1, 3]);
-    expect(result.prs.map((pr) => pr.reviews.nodes.length)).toEqual([4, 2, 4]);
-    expect(result.prs[0].reviews.nodes).toEqual([...inline, ...remaining]);
-    expect(result.isComplete).toBe(true);
-    expect(result.partialReasons).toEqual([]);
+    expect(result.map((item) => item.kind)).toEqual(["complete", "complete", "complete"]);
+    expect(result.map((item) => item.pullRequest.number)).toEqual([2, 1, 3]);
+    expect(result.map((item) => item.pullRequest.reviews.nodes.length)).toEqual([4, 2, 4]);
+    expect(result[0].pullRequest.reviews.nodes).toEqual([...inline, ...remaining]);
   });
 
-  test("keeps inline reviews and reports a partial result when a continuation fails", async () => {
+  test("keeps inline reviews and marks only that PR partial when a continuation fails", async () => {
     const fetchContinuation: FetchReviewContinuation = async (pr) => {
       if (pr.number === 2) throw new Error("boom");
       return remaining;
@@ -125,11 +126,14 @@ describe("resolveReviews", () => {
       concurrency: 5,
     });
 
-    expect(result.prs.map((pr) => pr.number)).toEqual([1, 2, 3]);
-    expect(result.prs[1].reviews.nodes).toEqual(inline);
-    expect(result.prs[2].reviews.nodes).toEqual([...inline, ...remaining]);
-    expect(result.isComplete).toBe(false);
-    expect(result.partialReasons).toEqual([`Failed to fetch complete reviews for ${REPO}#2: boom`]);
+    expect(result.map((item) => item.pullRequest.number)).toEqual([1, 2, 3]);
+    expect(result.map((item) => item.kind)).toEqual(["complete", "partial", "complete"]);
+    expect(result[1]).toEqual({
+      kind: "partial",
+      pullRequest: toPullRequest(overflowA, inline),
+      reason: `Failed to fetch complete reviews for ${REPO}#2: boom`,
+    });
+    expect(result[2].pullRequest.reviews.nodes).toEqual([...inline, ...remaining]);
   });
 
   test("runs at most `concurrency` continuations at once", async () => {

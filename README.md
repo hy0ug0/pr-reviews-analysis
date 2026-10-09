@@ -29,9 +29,23 @@ cp .env.example .env
 - `DEFAULT_REPOS`: pre-filled repositories (`owner/repo`, comma-separated)
 - `DEFAULT_LABEL`: pre-filled label filter
 - `DEFAULT_TEAM`: pre-filled team members (comma-separated GitHub handles)
-- `CACHE_TTL_HOURS`: how long, in hours, to keep pull request data fetched from GitHub (default `6`). The cache key covers repositories, label and date range. The team filter applies after the cache, so changing the team reuses the cached data. Tick "Skip cache" in the form to refetch.
+- `CACHE_TTL_HOURS`: how long, in hours, to reuse the list of PRs matching a query (default `6`). The list key covers repositories, label and date range. The team filter applies after the cache, so changing the team reuses the cached data.
+- `PR_CACHE_TTL_DAYS`: how long, in days, to keep each PR's data and reviews (default `30`). A cached PR is reused while its `updatedAt` on GitHub is unchanged, whatever query listed it.
 - `CACHE_DIR`: cache directory path (default `.cache/pr-reviews-analysis`)
 - `ANALYZE_IDLE_TIMEOUT_SECONDS`: Bun idle timeout for `/api/analyze`, in seconds. Defaults to `0`, which disables the timeout for this long-running local route. Finite values must be `1..255`.
+
+## Cache
+
+The server caches GitHub data on disk in two tiers:
+
+1. **PR list per query.** For a given set of repositories, label and date range, the server stores the matching PR numbers and each PR's `updatedAt`. Within `CACHE_TTL_HOURS`, the same query reuses this list without calling GitHub.
+2. **One entry per PR.** Each PR's data and reviews are stored under `owner/repo#number`. When a query lists a PR, the server reuses the cached entry if its `updatedAt` matches. Otherwise it fetches the PR again, in batches of 50 per GitHub GraphQL call.
+
+When the list expires, or the date range changes (the time range presets end today, so they change every day), the server lists the PRs again. This is a light search without reviews. Only new and updated PRs are fetched again. Merged and closed PRs rarely change, so most PRs come from the cache.
+
+Tick **Refresh from GitHub** in the form to list the PRs again right away. Only the PRs updated since they were cached are refetched. A line under the summary cards shows when the list was fetched and how many PRs came from GitHub or from the cache.
+
+A PR whose reviews could not be fetched completely is shown but not cached, so the next request fetches it again.
 
 ## Run
 
