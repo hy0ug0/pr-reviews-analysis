@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { fetchPullRequestDetails, listPullRequests, PullRequestListing } from "./github.ts";
 import type { GitHubRun } from "./github-run.ts";
+import type { AnalysisProgress } from "../shared/types.ts";
 import type { FetchedPullRequest, PullRequestRef } from "./pull-request-details.ts";
 import { pullRequestSchema, type PullRequest } from "./pull-request-model.ts";
 
@@ -44,7 +45,21 @@ const listMock = mock(
 );
 const detailsMock = mock(
   async (refs: Parameters<typeof fetchPullRequestDetails>[0], run: GitHubRun) => {
-    for (const ref of refs) await fakeGitHubCall(run, ref.repo);
+    for (const [index, ref] of refs.entries()) {
+      await fakeGitHubCall(run, ref.repo);
+      run.report({
+        phase: "fetching",
+        repo: ref.repo,
+        repoIndex: 0,
+        repoCount: 1,
+        prsDone: index + 1,
+        prsTotal: refs.length,
+        batchesDone: index + 1,
+        batchesTotal: refs.length,
+        reviewPRsDone: 0,
+        reviewPRsTotal: null,
+      });
+    }
     return new Map(
       refs.map((ref): [string, FetchedPullRequest] => {
         const key = `${ref.repo}#${ref.number}`;
@@ -682,5 +697,92 @@ describe("concurrent loadPullRequests", () => {
 
     const cached = await readCache(buildListingCacheKey(query), cachedListingSchema);
     expect(cached?.value.prs.map((pr) => pr.number)).toEqual([1, 2]);
+  });
+});
+
+describe("loadPullRequests progress", () => {
+  function phases(progress: AnalysisProgress[]): string[] {
+    return progress.map((snapshot) =>
+      snapshot.phase === "fetching"
+        ? `fetching ${snapshot.prsDone}/${snapshot.prsTotal}`
+        : snapshot.phase,
+    );
+  }
+
+  test("a request gets each step: listing cache, PR cache, then the fetch", async () => {
+    setRemote(makePR(1), makePR(2));
+    const progress: AnalysisProgress[] = [];
+
+    await loadPullRequests(query, {
+      skipCache: false,
+      onProgress: (snapshot) => progress.push(snapshot),
+    });
+
+    expect(phases(progress)).toEqual(["listing-cache", "pr-cache", "fetching 1/2", "fetching 2/2"]);
+  });
+
+  test("a request that joins a load gets its latest snapshot first, then the rest", async () => {
+    setRemote(makePR(1));
+    let releaseListing: () => void = () => {};
+    const listingGate = new Promise<void>((resolve) => {
+      releaseListing = resolve;
+    });
+    listMock.mockImplementationOnce(async (listQuery, run) => {
+      run.report({
+        phase: "listing",
+        repo: REPO,
+        repoIndex: 0,
+        repoCount: 1,
+        listed: 0,
+        matching: 1,
+        page: 1,
+        windowsDone: 0,
+        windowsTotal: 1,
+      });
+      await listingGate;
+      return {
+        prs: [{ repo: REPO, number: 1, updatedAt: makePR(1).updatedAt }],
+        matchingPRs: 1,
+        ...listingExtras,
+      };
+    });
+    const first = loadPullRequests(query, { skipCache: false });
+    while (listMock.mock.calls.length === 0) await Bun.sleep(1);
+    const joined: AnalysisProgress[] = [];
+
+    const second = loadPullRequests(query, {
+      skipCache: false,
+      onProgress: (snapshot) => joined.push(snapshot),
+    });
+    releaseListing();
+    await Promise.all([first, second]);
+
+    expect(phases(joined)).toEqual(["listing", "pr-cache", "fetching 1/1"]);
+  });
+
+  test("an aborted request stops getting progress, but the load finishes and fills the cache", async () => {
+    setRemote(makePR(1), makePR(2));
+    const leaving = new AbortController();
+    const progress: AnalysisProgress[] = [];
+
+    const load = loadPullRequests(query, {
+      skipCache: false,
+      signal: leaving.signal,
+      onProgress: (snapshot) => {
+        progress.push(snapshot);
+        if (snapshot.phase === "pr-cache") leaving.abort();
+      },
+    });
+    const loaded = await load;
+
+    expect(phases(progress)).toEqual(["listing-cache", "pr-cache"]);
+    expect(loaded.fetchResult.prs).toEqual([makePR(1), makePR(2)]);
+    expect(
+      (await readCache(buildListingCacheKey(query), cachedListingSchema))?.value.prs,
+    ).toHaveLength(2);
+    expect(
+      (await readCache(buildPullRequestCacheKey({ repo: REPO, number: 2 }), pullRequestSchema))
+        ?.value,
+    ).toEqual(makePR(2));
   });
 });

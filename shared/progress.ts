@@ -1,0 +1,120 @@
+import { keepNumbersWithUnits, pluralize } from "./format";
+import type { AnalysisProgress } from "./types";
+
+export const ANALYSIS_STEPS = ["List PRs", "Check cache", "Fetch details", "Analyze"] as const;
+
+// Each step's share of the overall bar. Fetching details is nearly all of a cold run's
+// time; listing is the next longest; the cache check and the analysis take moments.
+const STEP_SPANS: Record<(typeof ANALYSIS_STEPS)[number], [number, number]> = {
+  "List PRs": [0, 0.15],
+  "Check cache": [0.15, 0.2],
+  "Fetch details": [0.2, 0.95],
+  Analyze: [0.95, 1],
+};
+
+export interface ProgressView {
+  // Index into ANALYSIS_STEPS.
+  step: number;
+  // Overall share done, from 0 to 1. Null while the current step has no known total: the
+  // bar is then indeterminate, starting at `floor`.
+  fraction: number | null;
+  // Where the current step's known progress starts on the overall bar.
+  floor: number;
+  label: string;
+  // Repo and counts, shown after the label with "·" between them.
+  details: string[];
+}
+
+function position(step: number, share: number | null): Pick<ProgressView, "fraction" | "floor"> {
+  const [start, end] = STEP_SPANS[ANALYSIS_STEPS[step]];
+  const span = end - start;
+  return {
+    fraction: share === null ? null : start + span * Math.min(1, Math.max(0, share)),
+    floor: start + span * Math.min(1, Math.max(0, share ?? 0)),
+  };
+}
+
+function ratio(done: number, total: number): number {
+  return total === 0 ? 1 : done / total;
+}
+
+function repoDetails(progress: { repo: string; repoIndex: number; repoCount: number }) {
+  const { repo, repoIndex, repoCount } = progress;
+  return repoCount > 1 ? [repo, `repo ${repoIndex + 1} of ${repoCount}`] : [repo];
+}
+
+function view(
+  step: number,
+  share: number | null,
+  label: string,
+  details: string[],
+  floorShare: number = share ?? 0,
+): ProgressView {
+  const { fraction } = position(step, share);
+  return {
+    step,
+    fraction,
+    floor: position(step, floorShare).floor,
+    label,
+    details: details.map(keepNumbersWithUnits),
+  };
+}
+
+// What the progress panel shows for a snapshot. The bar is determinate only once the step
+// knows its total (the listing after its first page, the fetch from the start).
+export function describeProgress(progress: AnalysisProgress): ProgressView {
+  switch (progress.phase) {
+    case "listing-cache":
+      return view(0, null, "Looking up the PR list", []);
+    case "listing": {
+      const { repoIndex, repoCount, listed, matching, page, windowsDone, windowsTotal } = progress;
+      const repoShare = matching === null ? null : ratio(listed, matching);
+      const share = repoShare === null ? null : (repoIndex + repoShare) / repoCount;
+      const where: string[] = [];
+      if (page > 0) where.push(`page ${page}`);
+      if (windowsTotal > 1) where.push(`window ${windowsDone + 1} of ${windowsTotal}`);
+      const counts =
+        matching === null
+          ? where
+          : [
+              `${listed.toLocaleString()} of ${pluralize(matching, "PR")}${where.length > 0 ? ` (${where.join(", ")})` : ""}`,
+            ];
+      return view(
+        0,
+        share,
+        "Listing PRs",
+        [...repoDetails(progress), ...counts],
+        repoIndex / repoCount,
+      );
+    }
+    case "pr-cache":
+      return view(1, null, "Checking the cache", [pluralize(progress.prs, "PR")]);
+    case "fetching": {
+      const { prsDone, prsTotal, batchesDone, batchesTotal, reviewPRsDone, reviewPRsTotal } =
+        progress;
+      const share = ratio(prsDone, prsTotal);
+      if (batchesDone === batchesTotal && reviewPRsTotal !== null && reviewPRsTotal > 0) {
+        return view(2, share, "Fetching more reviews", [
+          ...repoDetails(progress),
+          `${reviewPRsDone.toLocaleString()} of ${pluralize(reviewPRsTotal, "PR")}`,
+        ]);
+      }
+      return view(2, share, "Fetching PR details", [
+        ...repoDetails(progress),
+        `${prsDone.toLocaleString()} of ${pluralize(prsTotal, "PR")} (${batchesDone} of ${pluralize(batchesTotal, "batch", "batches")})`,
+      ]);
+    }
+    case "analyzing":
+      return view(3, null, "Analyzing", [pluralize(progress.prs, "PR")]);
+    default: {
+      const _exhaustive: never = progress;
+      return _exhaustive;
+    }
+  }
+}
+
+// One line for screen readers and logs: "Fetching PR details: vitejs/vite, 150 of 412 PRs".
+export function progressSentence(view: ProgressView): string {
+  const details = view.details.map((detail) => detail.replaceAll(" ", " "));
+  return details.length === 0 ? view.label : `${view.label}: ${details.join(", ")}`;
+}

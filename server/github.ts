@@ -150,7 +150,7 @@ interface ListedPullRequestNode {
   updatedAt: string;
 }
 
-interface ListingResponse {
+export interface ListingResponse {
   search: {
     issueCount: number;
     pageInfo: PageInfo;
@@ -592,21 +592,28 @@ export async function fetchUserSuggestions(
   }
 }
 
+// One page of a PR search, after `after` (null for the first page). listPullRequests passes
+// the gh call; tests pass a fake.
+export type SearchPullRequestPage = (
+  searchQuery: string,
+  after: string | null,
+) => Promise<ListingResponse>;
+
+// Called after each page kept in a window, with the PRs listed in it so far.
+type OnWindowPage = (page: { listed: number; issueCount: number; page: number }) => void;
+
 async function listWindowPullRequests(
   repo: string,
   label: string | undefined,
   window: DateWindow,
-  run: GitHubRun,
+  searchPage: SearchPullRequestPage,
+  onPage: OnWindowPage,
 ): Promise<ListWindowResult> {
   log.info(
     `Listing PRs for ${repo} in window ${window.since}..${window.until}${label ? ` [label:${label}]` : ""}`,
   );
   const searchQuery = buildSearchQuery(repo, label, window.since, window.until);
-  const firstPage = await ghGraphqlWithRetry<ListingResponse>(
-    PR_LISTING_QUERY,
-    { searchQuery, first: SEARCH_PAGE_SIZE },
-    run,
-  );
+  const firstPage = await searchPage(searchQuery, null);
   const issueCount = firstPage.search.issueCount;
   const partialReasons: string[] = [];
   let isComplete = true;
@@ -629,6 +636,7 @@ async function listWindowPullRequests(
   log.info(
     `Window ${window.since}..${window.until}: listed page 1 (${prs.length}/${issueCount} PRs)`,
   );
+  onPage({ listed: prs.length, issueCount, page: pagesFetched });
 
   while (hasNextPage) {
     if (pagesFetched >= MAX_SEARCH_PAGES) {
@@ -641,9 +649,7 @@ async function listWindowPullRequests(
       return { kind: "listed", issueCount, prs, isComplete: false, partialReasons };
     }
 
-    const variables: Record<string, GraphqlVariable> = { searchQuery, first: SEARCH_PAGE_SIZE };
-    if (cursor) variables.after = cursor;
-    const page = await ghGraphqlWithRetry<ListingResponse>(PR_LISTING_QUERY, variables, run);
+    const page = await searchPage(searchQuery, cursor);
 
     prs.push(...page.search.nodes);
     hasNextPage = page.search.pageInfo.hasNextPage;
@@ -652,18 +658,38 @@ async function listWindowPullRequests(
     log.info(
       `Window ${window.since}..${window.until}: listed page ${pagesFetched} (${prs.length}/${issueCount} PRs)`,
     );
+    onPage({ listed: prs.length, issueCount, page: pagesFetched });
   }
 
   log.info(`Completed window ${window.since}..${window.until}: ${prs.length} PRs listed`);
   return { kind: "listed", issueCount, prs, isComplete, partialReasons };
 }
 
-async function listRepoPullRequests(
-  repo: string,
-  label: string | undefined,
-  range: DateWindow,
-  run: GitHubRun,
-): Promise<PullRequestListing> {
+// How far one repo's listing is. `matching` is the whole range's count, from the first page
+// of the first window; null before that page. windowsTotal grows when a window is split.
+export interface RepoListingProgress {
+  listed: number;
+  matching: number | null;
+  page: number;
+  windowsDone: number;
+  windowsTotal: number;
+}
+
+// Lists one repo's PRs in the range, splitting windows past the 1000-result Search limit.
+// onProgress gets a snapshot before the first page and after each page.
+export async function listRepoPullRequests({
+  repo,
+  label,
+  range,
+  searchPage,
+  onProgress = () => {},
+}: {
+  repo: string;
+  label: string | undefined;
+  range: DateWindow;
+  searchPage: SearchPullRequestPage;
+  onProgress?: (progress: RepoListingProgress) => void;
+}): Promise<PullRequestListing> {
   log.info(`Starting repo listing for ${repo} in range ${range.since}..${range.until}`);
   const windowsToList: DateWindow[] = [{ ...range }];
   const partialReasons: string[] = [];
@@ -671,10 +697,31 @@ async function listRepoPullRequests(
   const prs: ListedPullRequest[] = [];
   let matchingPRs = 0;
   let isComplete = true;
+  let rangeMatching: number | null = null;
+  let windowsDone = 0;
+  // The window being listed counts too, so the total includes it.
+  const windowsTotal = () => windowsDone + windowsToList.length + 1;
+  onProgress({ listed: 0, matching: null, page: 0, windowsDone, windowsTotal: 1 });
 
   while (windowsToList.length > 0) {
     const window = windowsToList.pop()!;
-    const windowResult = await listWindowPullRequests(repo, label, window, run);
+    const windowResult = await listWindowPullRequests(
+      repo,
+      label,
+      window,
+      searchPage,
+      ({ listed, issueCount, page }) => {
+        rangeMatching ??= issueCount;
+        onProgress({
+          listed: seen.size + listed,
+          matching: rangeMatching,
+          page,
+          windowsDone,
+          windowsTotal: windowsTotal(),
+        });
+      },
+    );
+    rangeMatching ??= windowResult.issueCount;
 
     if (windowResult.kind === "split") {
       const [left, right] = windowResult.halves;
@@ -682,6 +729,13 @@ async function listRepoPullRequests(
         `Window ${window.since}..${window.until} has ${windowResult.issueCount} matches; splitting into ${left.since}..${left.until} and ${right.since}..${right.until}`,
       );
       windowsToList.push(right, left);
+      onProgress({
+        listed: seen.size,
+        matching: rangeMatching,
+        page: 0,
+        windowsDone,
+        windowsTotal: windowsTotal() - 1,
+      });
       continue;
     }
 
@@ -694,6 +748,7 @@ async function listRepoPullRequests(
       seen.add(pr.number);
       prs.push({ repo, number: pr.number, updatedAt: pr.updatedAt });
     }
+    windowsDone++;
   }
 
   log.info(
@@ -783,8 +838,21 @@ export async function listPullRequests(
   let matchingPRs = 0;
   let isComplete = true;
 
-  for (const repo of repos) {
-    const repoListing = await listRepoPullRequests(repo, label, dateRange, run);
+  const searchPage: SearchPullRequestPage = (searchQuery, after) => {
+    const variables: Record<string, GraphqlVariable> = { searchQuery, first: SEARCH_PAGE_SIZE };
+    if (after) variables.after = after;
+    return ghGraphqlWithRetry<ListingResponse>(PR_LISTING_QUERY, variables, run);
+  };
+
+  for (const [repoIndex, repo] of repos.entries()) {
+    const repoListing = await listRepoPullRequests({
+      repo,
+      label,
+      range: dateRange,
+      searchPage,
+      onProgress: (progress) =>
+        run.report({ phase: "listing", repo, repoIndex, repoCount: repos.length, ...progress }),
+    });
     prs.push(...repoListing.prs);
     matchingPRs += repoListing.matchingPRs;
     if (!repoListing.isComplete) isComplete = false;
@@ -808,7 +876,10 @@ export async function fetchPullRequestDetails(
   }
 
   const fetched = new Map<string, FetchedPullRequest>();
-  for (const [repo, numbers] of numbersByRepo) {
+  const repoCount = numbersByRepo.size;
+  // PRs of the repos already done, so prsDone counts across repos.
+  let prsBefore = 0;
+  for (const [repoIndex, [repo, numbers]] of Array.from(numbersByRepo).entries()) {
     const results = await fetchPullRequestsInBatches({
       repo,
       numbers,
@@ -817,7 +888,21 @@ export async function fetchPullRequestDetails(
       fetchBatch: (batch) => fetchPullRequestBatch(repo, batch, run),
       fetchContinuation: (pr) =>
         fetchPullRequestReviews(repo, pr.number, pr.reviews.pageInfo.endCursor, run),
+      onProgress: ({ prsDone, batchesDone, batchesTotal, reviewPRsDone, reviewPRsTotal }) =>
+        run.report({
+          phase: "fetching",
+          repo,
+          repoIndex,
+          repoCount,
+          prsDone: prsBefore + prsDone,
+          prsTotal: refs.length,
+          batchesDone,
+          batchesTotal,
+          reviewPRsDone,
+          reviewPRsTotal,
+        }),
     });
+    prsBefore += numbers.length;
     numbers.forEach((number, index) => {
       fetched.set(pullRequestKey({ repo, number }), results[index]);
     });

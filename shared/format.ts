@@ -56,6 +56,12 @@ export function formatFetchTime(ms: number): string {
   return rest === 0 ? `${seconds / 60} min` : `${Math.floor(seconds / 60)} min ${rest} s`;
 }
 
+// A no-break space after each number keeps it on the same line as its unit ("592 PRs",
+// "14 s") when a narrow line wraps.
+export function keepNumbersWithUnits(text: string): string {
+  return text.replace(/(\d) /g, "$1 ");
+}
+
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
   return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
 }

@@ -146,9 +146,22 @@ function chunk<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+// How far one repo's fetch is. prsDone counts the PRs of finished batches, failed or not.
+// reviewPRsTotal is null until every batch is done and the PRs needing more review pages
+// are known.
+export interface BatchFetchProgress {
+  prsDone: number;
+  prsTotal: number;
+  batchesDone: number;
+  batchesTotal: number;
+  reviewPRsDone: number;
+  reviewPRsTotal: number | null;
+}
+
 // Fetches the given PRs of one repo, `batchSize` per GraphQL call and `concurrency` calls at
 // a time, then completes the reviews of PRs with more than one inline page. A failed batch
-// fails only its own PRs. The result keeps the order of `numbers`.
+// fails only its own PRs. The result keeps the order of `numbers`. onProgress gets a
+// snapshot before the first batch and after each batch and each extra review fetch.
 export async function fetchPullRequestsInBatches({
   repo,
   numbers,
@@ -156,6 +169,7 @@ export async function fetchPullRequestsInBatches({
   concurrency,
   fetchBatch,
   fetchContinuation,
+  onProgress = () => {},
 }: {
   repo: string;
   numbers: number[];
@@ -163,23 +177,42 @@ export async function fetchPullRequestsInBatches({
   concurrency: number;
   fetchBatch: FetchPullRequestBatch;
   fetchContinuation: FetchReviewContinuation;
+  onProgress?: (progress: BatchFetchProgress) => void;
 }): Promise<FetchedPullRequest[]> {
   const batches = chunk(numbers, batchSize);
   log.info(
     `Fetching ${numbers.length} PRs in ${repo} in ${batches.length} batches of up to ${batchSize} (concurrency=${concurrency})`,
   );
 
-  let completedBatches = 0;
+  const progress: BatchFetchProgress = {
+    prsDone: 0,
+    prsTotal: numbers.length,
+    batchesDone: 0,
+    batchesTotal: batches.length,
+    reviewPRsDone: 0,
+    reviewPRsTotal: null,
+  };
+  const report = (changes: Partial<BatchFetchProgress>) => {
+    Object.assign(progress, changes);
+    onProgress({ ...progress });
+  };
+  const batchDone = (batch: number[]) =>
+    report({
+      prsDone: progress.prsDone + batch.length,
+      batchesDone: progress.batchesDone + 1,
+    });
+  report({});
+
   const batchResults = await mapWithConcurrency(
     batches,
     concurrency,
     async (batch): Promise<BatchItem[]> => {
       try {
         const entries = await fetchBatch(batch);
-        completedBatches++;
         const failed = entries.filter((entry) => entry.kind === "failed").length;
+        batchDone(batch);
         log.info(
-          `Batch progress for ${repo}: ${completedBatches}/${batches.length} completed${failed > 0 ? ` (${failed} PRs failed)` : ""}`,
+          `Batch progress for ${repo}: ${progress.batchesDone}/${batches.length} completed${failed > 0 ? ` (${failed} PRs failed)` : ""}`,
         );
         return batch.map((number, index): BatchItem => {
           const entry = entries[index];
@@ -196,9 +229,9 @@ export async function fetchPullRequestsInBatches({
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "Unknown batch fetch error";
-        completedBatches++;
+        batchDone(batch);
         log.warn(
-          `Batch fetch failed for ${repo} (${completedBatches}/${batches.length}): ${message}`,
+          `Batch fetch failed for ${repo} (${progress.batchesDone}/${batches.length}): ${message}`,
         );
         return batch.map((number) => ({
           kind: "failed",
@@ -212,7 +245,13 @@ export async function fetchPullRequestsInBatches({
 
   const nodes = items.flatMap((item) => (item.kind === "node" ? [item.node] : []));
   // resolveReviews keeps the order of `nodes`, so the nth node item maps to resolved[n].
-  const resolved = await resolveReviews({ repo, prNodes: nodes, fetchContinuation, concurrency });
+  const resolved = await resolveReviews({
+    repo,
+    prNodes: nodes,
+    fetchContinuation,
+    concurrency,
+    onProgress: (done, total) => report({ reviewPRsDone: done, reviewPRsTotal: total }),
+  });
   let resolvedIndex = 0;
   return items.map((item): FetchedPullRequest => {
     switch (item.kind) {

@@ -33,7 +33,7 @@ cp .env.example .env
 - `CACHE_TTL_HOURS`: how long, in hours, to reuse the list of PRs matching a query (default `6`). The list key covers repositories, label and date range. The team filter applies after the cache, so changing the team reuses the cached data.
 - `PR_CACHE_TTL_DAYS`: how long, in days, to keep each PR's data and reviews (default `30`). A cached PR is reused while its `updatedAt` on GitHub is unchanged, whatever query listed it.
 - `CACHE_DIR`: cache directory path (default `.cache/pr-reviews-analysis`)
-- `ANALYZE_IDLE_TIMEOUT_SECONDS`: Bun idle timeout for `/api/analyze`, in seconds. Defaults to `0`, which disables the timeout for this long-running local route. Finite values must be `1..255`.
+- `ANALYZE_IDLE_TIMEOUT_SECONDS`: Bun idle timeout for plain JSON requests to `/api/analyze`, in seconds. Defaults to `0`, which disables the timeout for this long-running local route. Finite values must be `1..255`. The web app's progress stream is exempt: Bun does not restart this timeout when the response writes, so it would cut a long run short.
 
 The server reads these once at startup (`server/config.ts`). A numeric variable that isn't a whole number in its range, such as `CACHE_TTL_HOURS=6h`, logs a warning and uses the default.
 

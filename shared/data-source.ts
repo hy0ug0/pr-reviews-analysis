@@ -1,4 +1,4 @@
-import { formatFetchTime, formatTimeAgo, pluralize } from "./format";
+import { formatFetchTime, formatTimeAgo, keepNumbersWithUnits, pluralize } from "./format";
 import type { DataSource } from "./types";
 
 // Share of the loaded PRs that came from the cache, in whole percent. A mixed run never
@@ -55,7 +55,7 @@ function formatTimestamp(iso: string): string {
 // Items wrap at spaces only when one is wider than the whole line, as on a phone at 200%
 // zoom. A no-break space keeps each number with the word after it ("592 PRs", "14 s").
 function item(text: string, title: string | null = null): DataSourceLineItem {
-  return { text: text.replace(/(\d) /g, "$1\u00A0"), title };
+  return { text: keepNumbersWithUnits(text), title };
 }
 
 // The data-source line under the results: where the PRs came from, what it cost on GitHub,

@@ -115,6 +115,44 @@ export interface DataSource {
   skippedCache: boolean;
 }
 
+// Where an analysis run is, sent to the client while it waits. Every event is a full
+// snapshot, so a client that joins late or misses one still shows the right state. Repo
+// counts say which repo is in progress when the query has several.
+export type AnalysisProgress =
+  // Reading the PR list from the cache, which may send the run to GitHub.
+  | { phase: "listing-cache" }
+  // Searching the PR list on GitHub. `matching` is the repo's total, known after the first
+  // page. A range with more than 1,000 PRs is split into date windows, listed one by one.
+  | {
+      phase: "listing";
+      repo: string;
+      repoIndex: number;
+      repoCount: number;
+      listed: number;
+      matching: number | null;
+      page: number;
+      windowsDone: number;
+      windowsTotal: number;
+    }
+  // Matching the listed PRs against the PR cache.
+  | { phase: "pr-cache"; prs: number }
+  // Fetching the PRs the cache could not serve. PR counts cover every repo; batches and
+  // extra review pages cover the current one. reviewPRsTotal is null until its batches end.
+  | {
+      phase: "fetching";
+      repo: string;
+      repoIndex: number;
+      repoCount: number;
+      prsDone: number;
+      prsTotal: number;
+      batchesDone: number;
+      batchesTotal: number;
+      reviewPRsDone: number;
+      reviewPRsTotal: number | null;
+    }
+  // Computing the metrics, the last step.
+  | { phase: "analyzing"; prs: number };
+
 export interface AnalyzeParams {
   repos: string[];
   label?: string;
