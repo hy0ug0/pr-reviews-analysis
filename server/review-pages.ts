@@ -14,8 +14,9 @@ export interface ReviewConnection {
 }
 
 // A PR node selected with the PullRequestFields fragment, carrying the first page of its
-// reviews.
-export interface PullRequestNode extends Omit<PullRequest, "reviews"> {
+// reviews and its first ready-for-review event, if any.
+export interface PullRequestNode extends Omit<PullRequest, "reviews" | "readyForReviewAt"> {
+  timelineItems: { nodes: Array<{ createdAt: string }> };
   reviews: ReviewConnection;
 }
 
@@ -35,12 +36,15 @@ export function mergeReviewPages(inline: ReviewConnection, remaining: PRReview[]
   return [...inline.nodes, ...remaining];
 }
 
-// Drops the nested pageInfo so the result matches the shared PullRequest shape.
+// Drops the nested pageInfo and flattens the ready-for-review event so the result
+// matches the shared PullRequest shape.
 export function toPullRequest(node: PullRequestNode, reviews: PRReview[]): PullRequest {
-  const { reviews: _connection, ...pullRequest } = node;
+  const { reviews: _connection, timelineItems, comments, ...pullRequest } = node;
   return {
     ...pullRequest,
+    readyForReviewAt: timelineItems.nodes[0]?.createdAt ?? null,
     reviews: { nodes: reviews },
+    comments,
   };
 }
 

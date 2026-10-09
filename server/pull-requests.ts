@@ -13,15 +13,16 @@ import { mapWithConcurrency, uniqueReasons } from "./review-pages.ts";
 
 const log = createLogger("pull-requests");
 
-// Bump the version whenever PullRequest, PRReview or CachedListing change shape,
-// so entries written in the old shape are never read. Version 1 cached whole fetch results
-// under "pull-requests-v1".
-const CACHE_VERSION = 2;
+// Bump the version whenever PullRequest, PRReview, PRComment or CachedListing change
+// shape, so entries written in the old shape are never read. Version 1 cached whole fetch
+// results under "pull-requests-v1"; version 2 PRs had no draft, timeline or comment fields.
+const CACHE_VERSION = 3;
 const LISTING_NAMESPACE = `pull-request-listing-v${CACHE_VERSION}`;
 const PULL_REQUEST_NAMESPACE = `pull-request-v${CACHE_VERSION}`;
 const CACHE_IO_CONCURRENCY = 32;
 
-const actorSchema = z.object({ login: z.string() }).nullable();
+const prAuthorSchema = z.object({ login: z.string() }).nullable();
+const actorSchema = z.object({ login: z.string(), __typename: z.string() }).nullable();
 
 // The one schema for a PullRequest, used to validate PR cache entries.
 export const pullRequestSchema = z.object({
@@ -33,7 +34,9 @@ export const pullRequestSchema = z.object({
   updatedAt: z.string(),
   mergedAt: z.string().nullable(),
   closedAt: z.string().nullable(),
-  author: actorSchema,
+  isDraft: z.boolean(),
+  readyForReviewAt: z.string().nullable(),
+  author: prAuthorSchema,
   reviews: z.object({
     nodes: z.array(
       z.object({
@@ -43,6 +46,9 @@ export const pullRequestSchema = z.object({
         body: z.string(),
       }),
     ),
+  }),
+  comments: z.object({
+    nodes: z.array(z.object({ author: actorSchema, createdAt: z.string() })),
   }),
 });
 

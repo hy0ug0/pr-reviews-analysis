@@ -20,7 +20,7 @@ function makeReview({
   submittedAt?: string | null;
 }): PRReview {
   return {
-    author: by === null ? null : { login: by },
+    author: by === null ? null : { login: by, __typename: "User" },
     state,
     submittedAt,
     body: "",
@@ -45,8 +45,11 @@ function makePR({
     updatedAt: "2026-03-20T09:00:00Z",
     mergedAt: "2026-03-20T09:00:00Z",
     closedAt: "2026-03-20T09:00:00Z",
+    isDraft: false,
+    readyForReviewAt: null,
     author: author === null ? null : { login: author },
     reviews: { nodes: reviews },
+    comments: { nodes: [] },
   };
 }
 
@@ -288,6 +291,7 @@ describe("output shape", () => {
       uniqueReviewers: 0,
       avgReviewsPerPR: 0,
       reviewerStats: [],
+      firstResponse: expect.objectContaining({ respondedPRs: 0, p50Ms: null, weekly: [] }),
       timeRange: { since: "", until: "" },
     });
   });

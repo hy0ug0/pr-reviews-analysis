@@ -12,7 +12,7 @@ import {
 const REPO = "acme/widgets";
 
 function makeReview(by: string, submittedAt: string): PRReview {
-  return { author: { login: by }, state: "COMMENTED", submittedAt, body: "" };
+  return { author: { login: by, __typename: "User" }, state: "COMMENTED", submittedAt, body: "" };
 }
 
 function makeConnection(
@@ -23,7 +23,15 @@ function makeConnection(
   return { pageInfo: { hasNextPage, endCursor }, nodes };
 }
 
-function makeNode(number: number, reviews: ReviewConnection): PullRequestNode {
+const comments = {
+  nodes: [{ author: { login: "frank", __typename: "User" }, createdAt: "2026-03-01T11:00:00Z" }],
+};
+
+function makeNode(
+  number: number,
+  reviews: ReviewConnection,
+  readyForReviewEvents: Array<{ createdAt: string }> = [],
+): PullRequestNode {
   return {
     number,
     title: `Widget change #${number}`,
@@ -33,8 +41,11 @@ function makeNode(number: number, reviews: ReviewConnection): PullRequestNode {
     updatedAt: "2026-03-05T09:00:00Z",
     mergedAt: "2026-03-05T09:00:00Z",
     closedAt: "2026-03-05T09:00:00Z",
+    isDraft: false,
     author: { login: "erin" },
+    timelineItems: { nodes: readyForReviewEvents },
     reviews,
+    comments,
   };
 }
 
@@ -79,10 +90,28 @@ describe("toPullRequest", () => {
       "updatedAt",
       "mergedAt",
       "closedAt",
+      "isDraft",
       "author",
+      "readyForReviewAt",
       "reviews",
+      "comments",
     ]);
     expect(pullRequest.reviews).toEqual({ nodes: [...inline, ...remaining] });
+    expect(pullRequest.comments).toEqual(comments);
+  });
+
+  test("takes readyForReviewAt from the first ready-for-review event", () => {
+    const node = makeNode(7, makeConnection(inline, null, false), [
+      { createdAt: "2026-03-02T08:00:00Z" },
+    ]);
+
+    expect(toPullRequest(node, inline).readyForReviewAt).toBe("2026-03-02T08:00:00Z");
+  });
+
+  test("sets readyForReviewAt to null when the PR was never a draft", () => {
+    const node = makeNode(7, makeConnection(inline, null, false));
+
+    expect(toPullRequest(node, inline).readyForReviewAt).toBeNull();
   });
 });
 
