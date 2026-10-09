@@ -56,17 +56,25 @@ export interface FirstResponseSummary {
   weekly: WeeklyFirstResponse[];
 }
 
-export interface AnalysisResult {
+// How many of the PRs the query matches were analyzed, and why some are missing.
+export interface AnalysisCoverage {
   matchingPRs: number;
   analyzedPRs: number;
   isComplete: boolean;
   partialReasons: string[];
+}
+
+// What analyze() computes from the loaded PRs.
+export interface AnalysisMetrics {
   totalReviews: number;
   uniqueReviewers: number;
   avgReviewsPerPR: number;
   reviewerStats: ReviewerStats[];
   firstResponse: FirstResponseSummary;
   timeRange: { since: string; until: string };
+}
+
+export interface AnalysisResult extends AnalysisCoverage, AnalysisMetrics {
   dataSource?: DataSource;
 }
 

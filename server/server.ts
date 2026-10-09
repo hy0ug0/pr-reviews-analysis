@@ -6,9 +6,9 @@ import {
   fetchRepositorySuggestions,
   fetchUserSuggestions,
 } from "./github.ts";
-import { analyze } from "./analyzer.ts";
+import { analyze } from "./analysis/analyzer.ts";
 import { createLogger } from "./logger.ts";
-import type { AnalyzeParams } from "../shared/types.ts";
+import type { AnalysisResult, AnalyzeParams } from "../shared/types.ts";
 import { analyzeQuerySchema } from "../shared/schemas.ts";
 import { getCacheConfig } from "./cache.ts";
 import { loadPullRequests } from "./pull-requests.ts";
@@ -132,12 +132,14 @@ app.get(
         `Analyzing ${analyzedPRs} PRs (total matching: ${matchingPRs}; listing from ${dataSource.listing}, ${dataSource.fetchedPRs} fetched, ${dataSource.reusedPRs} reused)`,
       );
 
-      const result = analyze(prs, params);
-      result.matchingPRs = matchingPRs;
-      result.analyzedPRs = analyzedPRs;
-      result.isComplete = isComplete;
-      result.partialReasons = partialReasons;
-      result.dataSource = dataSource;
+      const result: AnalysisResult = {
+        matchingPRs,
+        analyzedPRs,
+        isComplete,
+        partialReasons,
+        ...analyze(prs, params),
+        dataSource,
+      };
 
       return c.json(result);
     } catch (err: unknown) {

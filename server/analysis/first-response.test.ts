@@ -5,16 +5,15 @@ import {
   type PRReview,
   type PullRequest,
   type ReviewState,
-} from "../shared/types.ts";
+} from "../../shared/types.ts";
 import {
   classifyFirstResponse,
-  percentile,
   responseStart,
   summarizeFirstResponse,
-  toTeamFilter,
-  weekStart,
   type FirstResponseOutcome,
 } from "./first-response.ts";
+import { toTeamFilter } from "./participants.ts";
+import { percentile, weekStart } from "./stats.ts";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
