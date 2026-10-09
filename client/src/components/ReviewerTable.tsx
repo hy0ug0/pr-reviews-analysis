@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useCallback, useId } from "react";
 import { formatDuration, pluralize } from "../../../shared/format";
 import type { ReviewerStats } from "../types";
 
@@ -179,13 +179,14 @@ interface TooltipState {
   y: number;
 }
 
-function TooltipIcon({ text }: { text: string }) {
+// A focusable info button: the tooltip shows on hover and on keyboard focus, and screen
+// readers get the text as the button's description.
+function TooltipIcon({ text, label }: { text: string; label: string }) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
-  const iconRef = useRef<SVGSVGElement>(null);
+  const descriptionId = useId();
 
   const show = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
+    (e: React.MouseEvent | React.FocusEvent) => {
       const rect = e.currentTarget.getBoundingClientRect();
       setTooltip({ text, x: rect.left + rect.width / 2, y: rect.top });
     },
@@ -196,24 +197,35 @@ function TooltipIcon({ text }: { text: string }) {
 
   return (
     <>
-      <svg
-        ref={iconRef}
+      <button
+        type="button"
+        aria-label={`About ${label}`}
+        aria-describedby={descriptionId}
         onMouseEnter={show}
         onMouseLeave={hide}
-        onClick={(e) => e.stopPropagation()}
-        className="w-3 h-3 text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 transition-colors cursor-default shrink-0"
-        fill="currentColor"
-        viewBox="0 0 20 20"
+        onFocus={show}
+        onBlur={hide}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") hide();
+        }}
+        className="relative z-10 shrink-0 rounded-full cursor-default text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400"
       >
-        <path
-          fillRule="evenodd"
-          d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z"
-          clipRule="evenodd"
-        />
-      </svg>
+        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+          <path
+            fillRule="evenodd"
+            d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z"
+            clipRule="evenodd"
+          />
+        </svg>
+      </button>
+      {/* Hidden, so it stays out of the column header's name; aria-describedby still reads it. */}
+      <span id={descriptionId} hidden>
+        {text}
+      </span>
       {tooltip && (
         <div
-          className="fixed z-50 w-56 rounded-lg bg-gray-900 dark:bg-slate-700 px-3 py-2 text-xs font-normal text-white normal-case tracking-normal leading-relaxed shadow-lg pointer-events-none text-left"
+          aria-hidden="true"
+          className="fixed z-50 w-56 rounded-lg bg-gray-900 dark:bg-slate-700 px-3 py-2 text-xs font-normal text-white normal-case tracking-normal leading-relaxed shadow-lg pointer-events-none text-left whitespace-normal"
           style={{ left: tooltip.x, top: tooltip.y - 8, transform: "translate(-50%, -100%)" }}
         >
           {tooltip.text}
@@ -245,9 +257,25 @@ export function ReviewerTable({ stats }: ReviewerTableProps) {
     }
   };
 
+  const ariaSort = (key: SortKey) => {
+    if (key !== sortKey) return "none";
+    return sortAsc ? "ascending" : "descending";
+  };
+
+  // Decorative: aria-sort on the header says the same to screen readers.
   const sortIndicator = (key: SortKey) => {
-    if (key !== sortKey) return <span className="ml-1 opacity-30 text-[10px]">⇅</span>;
-    return <span className="ml-1 text-[10px]">{sortAsc ? "↑" : "↓"}</span>;
+    if (key !== sortKey) {
+      return (
+        <span aria-hidden="true" className="ml-1 opacity-30 text-[10px]">
+          ⇅
+        </span>
+      );
+    }
+    return (
+      <span aria-hidden="true" className="ml-1 text-[10px]">
+        {sortAsc ? "↑" : "↓"}
+      </span>
+    );
   };
 
   return (
@@ -284,15 +312,26 @@ export function ReviewerTable({ stats }: ReviewerTableProps) {
               {columns.map((col) => (
                 <th
                   key={col.key}
-                  onClick={() => handleSort(col.key)}
-                  className={`px-6 py-3 whitespace-nowrap text-xs font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors ${
+                  scope="col"
+                  // Names the column without the info button's "About …" label.
+                  aria-label={col.label}
+                  aria-sort={ariaSort(col.key)}
+                  className={`relative px-6 py-3 whitespace-nowrap text-xs font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider select-none hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors ${
                     col.align === "right" ? "text-right" : "text-left"
                   }`}
                 >
                   <span className="inline-flex items-center gap-1 justify-end w-full">
-                    {col.label}
-                    {col.tooltip && <TooltipIcon text={col.tooltip} />}
-                    {sortIndicator(col.key)}
+                    {/* The ::after layer makes the whole header cell the click target; the
+                        info button sits above it. */}
+                    <button
+                      type="button"
+                      onClick={() => handleSort(col.key)}
+                      className="inline-flex items-center gap-1 rounded-sm uppercase tracking-wider cursor-pointer after:absolute after:inset-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400"
+                    >
+                      {col.label}
+                      {sortIndicator(col.key)}
+                    </button>
+                    {col.tooltip && <TooltipIcon text={col.tooltip} label={col.label} />}
                   </span>
                 </th>
               ))}
