@@ -6,6 +6,7 @@ import { Header } from "./components/Header";
 import { AnalyzeForm } from "./components/AnalyzeForm";
 import { SummaryCards } from "./components/SummaryCards";
 import { DataSourceNote } from "./components/DataSourceNote";
+import { ExcludedBotsNote } from "./components/ExcludedBotsNote";
 import { ReviewsChart } from "./components/ReviewsChart";
 import { TypesChart } from "./components/TypesChart";
 import { ReviewerTable } from "./components/ReviewerTable";
@@ -143,12 +144,14 @@ export default function App() {
 
             <div className="space-y-2">
               <SummaryCards data={result} />
+              {result.excludedBots && <ExcludedBotsNote excludedBots={result.excludedBots} />}
               {result.dataSource && <DataSourceNote dataSource={result.dataSource} />}
             </div>
 
             <FirstResponseSection
               summary={result.firstResponse}
               teamMembers={resultTeam}
+              includeBots={result.excludedBots === null}
               isDark={isDark}
             />
 

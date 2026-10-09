@@ -7,6 +7,8 @@ import { FirstResponseTrend } from "./FirstResponseTrend";
 interface FirstResponseSectionProps {
   summary: FirstResponseSummary;
   teamMembers: string[];
+  // Whether the result counted bots, which changes who can respond.
+  includeBots: boolean;
   isDark: boolean;
 }
 
@@ -65,7 +67,13 @@ function coverageSegments(summary: FirstResponseSummary): CoverageSegment[] {
   return segments.filter((segment) => segment.key !== "undetermined" || segment.count > 0);
 }
 
-function Coverage({ summary }: { summary: FirstResponseSummary }) {
+function Coverage({
+  summary,
+  includeBots,
+}: {
+  summary: FirstResponseSummary;
+  includeBots: boolean;
+}) {
   const segments = coverageSegments(summary);
   const total = segments.reduce((sum, segment) => sum + segment.count, 0);
   if (total === 0) return null;
@@ -109,8 +117,9 @@ function Coverage({ summary }: { summary: FirstResponseSummary }) {
       </ul>
       {summary.undeterminedPRs > 0 && (
         <p className="mt-3 text-xs text-gray-500 dark:text-slate-400">
-          Undetermined: the first {COMMENTS_PAGE_SIZE} comments are all from bots or the author, and
-          no review came earlier. The first response may be in a later comment, which isn't fetched.
+          Undetermined: the first {COMMENTS_PAGE_SIZE} comments are all from{" "}
+          {includeBots ? "the author" : "bots or the author"}, and no review came earlier. The first
+          response may be in a later comment, which isn't fetched.
         </p>
       )}
     </div>
@@ -172,7 +181,12 @@ function EmptyState({
   );
 }
 
-export function FirstResponseSection({ summary, teamMembers, isDark }: FirstResponseSectionProps) {
+export function FirstResponseSection({
+  summary,
+  teamMembers,
+  includeBots,
+  isDark,
+}: FirstResponseSectionProps) {
   const hasTeamFilter = teamMembers.length > 0;
   const hasResponses = summary.respondedPRs > 0;
   const hasGaps = summary.weekly.some((week) => week.p50Ms === null);
@@ -187,8 +201,10 @@ export function FirstResponseSection({ summary, teamMembers, isDark }: FirstResp
           Time to first response
         </h3>
         <p className="mt-1 max-w-3xl text-sm text-gray-500 dark:text-slate-400">
-          From ready for review to the first review or comment by someone other than the author.
-          Bots don't count, and PRs still in draft are left out.
+          From ready for review to the first review or comment by someone other than the author.{" "}
+          {includeBots
+            ? "PRs still in draft are left out."
+            : "Bots don't count, and PRs still in draft are left out."}
         </p>
         {hasTeamFilter && (
           <p className="mt-3 inline-flex rounded-lg bg-indigo-50 px-3 py-1.5 text-xs text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
@@ -215,7 +231,7 @@ export function FirstResponseSection({ summary, teamMembers, isDark }: FirstResp
                 : "lg:col-span-2"
             }
           >
-            <Coverage summary={summary} />
+            <Coverage summary={summary} includeBots={includeBots} />
           </div>
         </div>
       </div>

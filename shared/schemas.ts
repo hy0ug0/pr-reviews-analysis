@@ -78,6 +78,7 @@ export const analyzeFormSchema = z
     until: z.string().optional().default(""),
     team: z.string().trim().optional().default(""),
     skipCache: z.boolean().optional().default(false),
+    includeBots: z.boolean().optional().default(false),
   })
   // Presets compute their own range; only a custom one comes from the user.
   .superRefine((form, ctx) => {
@@ -87,6 +88,12 @@ export const analyzeFormSchema = z
 
 export type AnalyzeFormInput = z.input<typeof analyzeFormSchema>;
 
+// Flags travel as 1; any other value or none means off.
+const flagSchema = z
+  .string()
+  .optional()
+  .transform((v) => v === "1");
+
 // The parameter keeps the form's field name, `repo`; the output calls the list `repos`.
 export const analyzeQuerySchema = z
   .object({
@@ -95,10 +102,9 @@ export const analyzeQuerySchema = z
     since: optionalDateSchema,
     until: optionalDateSchema,
     team: z.string().optional().transform(parseList),
-    skipCache: z
-      .string()
-      .optional()
-      .transform((v) => v === "1"),
+    skipCache: flagSchema,
+    // Applied after the cache, so it is not part of any cache key.
+    includeBots: flagSchema,
   })
   .superRefine(checkDateRange)
   .transform(({ repo, ...rest }) => ({ ...rest, repos: repo }));
@@ -146,6 +152,8 @@ export const dataSourceSchema = z.object({
 });
 
 export const analysisResultSchema = z.object({
+  countedPRs: z.number(),
+  excludedBots: z.object({ prs: z.number(), reviews: z.number() }).nullable(),
   matchingPRs: z.number(),
   analyzedPRs: z.number(),
   isComplete: z.boolean(),

@@ -26,6 +26,12 @@ const baseInputClass =
   "w-full px-3 py-2 border rounded-lg shadow-sm bg-white dark:bg-slate-800 text-gray-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm";
 const inputClass = `${baseInputClass} border-gray-300 dark:border-slate-700`;
 const inputErrorClass = `${baseInputClass} border-red-400 dark:border-red-600`;
+const checkboxLabelClass =
+  "inline-flex items-start gap-2 text-sm text-gray-700 dark:text-slate-300 cursor-pointer select-none";
+const checkboxClass =
+  "mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800";
+// Darker than the field hints above: at 12px, gray-400 and slate-500 miss 4.5:1 contrast.
+const checkboxHintClass = "block text-xs text-gray-500 dark:text-slate-400";
 
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
@@ -253,6 +259,7 @@ export function AnalyzeForm({ onSubmit, loading, defaults }: AnalyzeFormProps) {
     until: "",
     team: "",
     skipCache: false,
+    includeBots: false,
   });
   const [errors, setErrors] = useState<Partial<Record<keyof AnalyzeFormValues, string>>>({});
 
@@ -435,20 +442,36 @@ export function AnalyzeForm({ onSubmit, loading, defaults }: AnalyzeFormProps) {
         )}
 
         <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <label className="inline-flex items-start gap-2 text-sm text-gray-700 dark:text-slate-300 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={form.skipCache}
-              onChange={(e) => update("skipCache", e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800"
-            />
-            <span>
-              Refresh from GitHub
-              <span className="block text-xs text-gray-400 dark:text-slate-500">
-                Lists PRs again; only PRs updated since they were cached are refetched
+          <div className="flex flex-col gap-3 md:flex-row md:gap-8">
+            <label className={checkboxLabelClass}>
+              <input
+                type="checkbox"
+                checked={form.skipCache}
+                onChange={(e) => update("skipCache", e.target.checked)}
+                className={checkboxClass}
+              />
+              <span>
+                Refresh from GitHub
+                <span className={checkboxHintClass}>
+                  Lists PRs again; only PRs updated since they were cached are refetched
+                </span>
               </span>
-            </span>
-          </label>
+            </label>
+            <label className={checkboxLabelClass}>
+              <input
+                type="checkbox"
+                checked={form.includeBots}
+                onChange={(e) => update("includeBots", e.target.checked)}
+                className={checkboxClass}
+              />
+              <span>
+                Include bots
+                <span className={checkboxHintClass}>
+                  Counts PRs and reviews by GitHub Apps, [bot] accounts and BOT_LOGINS
+                </span>
+              </span>
+            </label>
+          </div>
           <button
             type="submit"
             disabled={loading}

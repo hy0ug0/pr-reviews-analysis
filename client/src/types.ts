@@ -9,6 +9,7 @@ export type {
   WeeklyFirstResponse,
   AppDefaults,
   DataSource,
+  ExcludedBots,
   TimeRangePreset,
 } from "../../shared/types";
 
@@ -20,4 +21,5 @@ export interface AnalyzeFormValues {
   until: string;
   team: string;
   skipCache: boolean;
+  includeBots: boolean;
 }

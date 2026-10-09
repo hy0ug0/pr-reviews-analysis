@@ -10,6 +10,7 @@ describe("parseConfig", () => {
       defaultRepos: [],
       defaultLabel: "",
       defaultTeam: [],
+      botLogins: [],
       cacheDir: "/srv/app/.cache/pr-reviews-analysis",
       cacheTtlHours: 6,
       prCacheTtlDays: 30,
@@ -25,6 +26,7 @@ describe("parseConfig", () => {
           DEFAULT_REPOS: "acme/widgets, acme/gadgets,",
           DEFAULT_LABEL: " bug ",
           DEFAULT_TEAM: "alice,,bob",
+          BOT_LOGINS: " ci-user, Release-Bot,",
           CACHE_DIR: "tmp/cache",
           CACHE_TTL_HOURS: "12",
           PR_CACHE_TTL_DAYS: "7",
@@ -37,6 +39,8 @@ describe("parseConfig", () => {
       defaultRepos: ["acme/widgets", "acme/gadgets"],
       defaultLabel: "bug",
       defaultTeam: ["alice", "bob"],
+      // Kept as written; the participant rules compare logins case-insensitively.
+      botLogins: ["ci-user", "Release-Bot"],
       cacheDir: "/srv/app/tmp/cache",
       cacheTtlHours: 12,
       prCacheTtlDays: 7,
@@ -52,12 +56,16 @@ describe("parseConfig", () => {
 
   test("treats blank values as unset", () => {
     expect(
-      parseConfig({ PORT: " ", CACHE_DIR: " ", DEFAULT_LABEL: " ", DEFAULT_TEAM: " , " }, CWD),
+      parseConfig(
+        { PORT: " ", CACHE_DIR: " ", DEFAULT_LABEL: " ", DEFAULT_TEAM: " , ", BOT_LOGINS: " " },
+        CWD,
+      ),
     ).toMatchObject({
       port: 3000,
       cacheDir: "/srv/app/.cache/pr-reviews-analysis",
       defaultLabel: "",
       defaultTeam: [],
+      botLogins: [],
     });
   });
 

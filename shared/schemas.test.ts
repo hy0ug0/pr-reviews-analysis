@@ -34,11 +34,22 @@ describe("analyzeQuerySchema", () => {
       until: undefined,
       team: ["alice", "bob"],
       skipCache: false,
+      includeBots: false,
     });
   });
 
   test("defaults team to an empty list", () => {
     expect(analyzeQuerySchema.parse({ repo: "acme/widgets" }).team).toEqual([]);
+  });
+
+  test("includes bots only when includeBots is 1", () => {
+    const includeBots = (value?: string) =>
+      analyzeQuerySchema.parse({ repo: "acme/widgets", includeBots: value }).includeBots;
+
+    expect(includeBots("1")).toBe(true);
+    expect(includeBots(undefined)).toBe(false);
+    expect(includeBots("0")).toBe(false);
+    expect(includeBots("true")).toBe(false);
   });
 
   test("accepts a leap day and a same-day range", () => {
@@ -103,6 +114,11 @@ describe("analyzeFormSchema", () => {
     expect(issues(analyzeFormSchema.safeParse({ ...custom, since: "2026-10-10" }))).toEqual([
       "since: Must be on or before today",
     ]);
+  });
+
+  test("leaves bots out unless the form includes them", () => {
+    expect(analyzeFormSchema.parse(form).includeBots).toBe(false);
+    expect(analyzeFormSchema.parse({ ...form, includeBots: true }).includeBots).toBe(true);
   });
 
   test("ignores leftover dates when a preset is selected", () => {

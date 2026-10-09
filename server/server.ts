@@ -59,11 +59,11 @@ app.get(
     }
   }),
   async (c) => {
-    const { repos, label, since, until, team, skipCache } = c.req.valid("query");
-    const params: AnalyzeParams = { repos, label, since, until, teamMembers: team };
+    const { repos, label, since, until, team, skipCache, includeBots } = c.req.valid("query");
+    const params: AnalyzeParams = { repos, label, since, until, teamMembers: team, includeBots };
 
     log.info(
-      `Analyzing: ${repos.join(", ")}${label ? ` [label: ${label}]` : ""}${since ? ` from ${since}` : ""}${until ? ` to ${until}` : ""}${skipCache ? " [skip cache]" : ""}`,
+      `Analyzing: ${repos.join(", ")}${label ? ` [label: ${label}]` : ""}${since ? ` from ${since}` : ""}${until ? ` to ${until}` : ""}${skipCache ? " [skip cache]" : ""}${includeBots ? " [include bots]" : ""}`,
     );
 
     try {
@@ -81,7 +81,7 @@ app.get(
         analyzedPRs,
         isComplete,
         partialReasons,
-        ...analyze(prs, params),
+        ...analyze(prs, { ...params, botLogins: config.botLogins }),
         dataSource,
       };
 

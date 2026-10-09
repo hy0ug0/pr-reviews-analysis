@@ -32,7 +32,7 @@ function makeNode(number: number, hasMoreReviews = false): PullRequestNode {
     mergedAt: "2026-03-05T09:00:00Z",
     closedAt: "2026-03-05T09:00:00Z",
     isDraft: false,
-    author: { login: "erin" },
+    author: { login: "erin", __typename: "User" },
     timelineItems: { nodes: [] },
     reviews: {
       pageInfo: { hasNextPage: hasMoreReviews, endCursor: `cursor-${number}` },
