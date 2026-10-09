@@ -3,6 +3,7 @@ import type { TimeRangePreset } from "../../shared/types";
 export type {
   AppSuggestion,
   ReviewerStats,
+  AnalysisProgress,
   AnalysisResult,
   DurationBucket,
   FirstResponseSummary,
