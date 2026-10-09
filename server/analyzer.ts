@@ -1,11 +1,9 @@
 import type { PullRequest, AnalyzeParams, AnalysisResult, ReviewerStats } from "../shared/types.ts";
+import { summarizeFirstResponse, toTeamFilter } from "./first-response.ts";
 
 export function analyze(prs: PullRequest[], params: AnalyzeParams): AnalysisResult {
   const reviewerMap = new Map<string, ReviewerStats>();
-  // GitHub logins are case-insensitive; the API returns the canonical casing.
-  const teamSet = params.teamMembers?.length
-    ? new Set(params.teamMembers.map((member) => member.toLowerCase()))
-    : null;
+  const teamSet = toTeamFilter(params.teamMembers);
 
   let totalReviews = 0;
   const sinceISO = params.since || "";
@@ -72,6 +70,12 @@ export function analyze(prs: PullRequest[], params: AnalyzeParams): AnalysisResu
     uniqueReviewers: reviewerStats.length,
     avgReviewsPerPR: prs.length > 0 ? Math.round((totalReviews / prs.length) * 10) / 10 : 0,
     reviewerStats,
+    firstResponse: summarizeFirstResponse({
+      prs,
+      teamMembers: params.teamMembers,
+      since: params.since,
+      until: params.until,
+    }),
     timeRange: {
       since: params.since || "",
       until: params.until || "",

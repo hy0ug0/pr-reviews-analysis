@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AnalysisResult } from "./types";
 
 const REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 
@@ -67,6 +68,32 @@ export const reviewerStatsSchema = z.object({
   prsReviewed: z.number(),
 });
 
+export const firstResponseSummarySchema = z.object({
+  respondedPRs: z.number(),
+  waitingPRs: z.number(),
+  closedWithoutResponsePRs: z.number(),
+  draftPRs: z.number(),
+  undeterminedPRs: z.number(),
+  p50Ms: z.number().nullable(),
+  p75Ms: z.number().nullable(),
+  p90Ms: z.number().nullable(),
+  histogram: z.array(
+    z.object({
+      label: z.string(),
+      minMs: z.number(),
+      maxMs: z.number().nullable(),
+      count: z.number(),
+    }),
+  ),
+  weekly: z.array(
+    z.object({
+      weekStart: z.string(),
+      p50Ms: z.number().nullable(),
+      count: z.number(),
+    }),
+  ),
+});
+
 export const dataSourceSchema = z.object({
   listing: z.enum(["cache", "github"]),
   listedAt: z.string(),
@@ -83,6 +110,13 @@ export const analysisResultSchema = z.object({
   uniqueReviewers: z.number(),
   avgReviewsPerPR: z.number(),
   reviewerStats: z.array(reviewerStatsSchema),
+  firstResponse: firstResponseSummarySchema,
   timeRange: z.object({ since: z.string(), until: z.string() }),
   dataSource: dataSourceSchema.optional(),
 });
+
+// Fails to compile when the schema and AnalysisResult differ in any field, so the
+// client never strips or rejects a field the server sends.
+type Equals<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+true satisfies Equals<z.infer<typeof analysisResultSchema>, AnalysisResult>;

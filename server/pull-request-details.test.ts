@@ -15,7 +15,7 @@ const REPO = "acme/widgets";
 
 function makeReview(by: string): PRReview {
   return {
-    author: { login: by },
+    author: { login: by, __typename: "User" },
     state: "APPROVED",
     submittedAt: "2026-03-02T10:00:00Z",
     body: "",
@@ -32,11 +32,14 @@ function makeNode(number: number, hasMoreReviews = false): PullRequestNode {
     updatedAt: "2026-03-05T09:00:00Z",
     mergedAt: "2026-03-05T09:00:00Z",
     closedAt: "2026-03-05T09:00:00Z",
+    isDraft: false,
     author: { login: "erin" },
+    timelineItems: { nodes: [] },
     reviews: {
       pageInfo: { hasNextPage: hasMoreReviews, endCursor: `cursor-${number}` },
       nodes: [makeReview("alice")],
     },
+    comments: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }
 
@@ -126,9 +129,10 @@ describe("fetchPullRequestsInBatches", () => {
       fetchContinuation: noContinuation,
     });
 
+    const { timelineItems: _timeline, ...node } = makeNode(1);
     expect(item).toEqual({
       kind: "complete",
-      pullRequest: { ...makeNode(1), reviews: { nodes: [makeReview("alice")] } },
+      pullRequest: { ...node, readyForReviewAt: null, reviews: { nodes: [makeReview("alice")] } },
     });
   });
 

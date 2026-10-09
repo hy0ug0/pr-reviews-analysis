@@ -8,6 +8,7 @@ import { DataSourceNote } from "./components/DataSourceNote";
 import { ReviewsChart } from "./components/ReviewsChart";
 import { TypesChart } from "./components/TypesChart";
 import { ReviewerTable } from "./components/ReviewerTable";
+import { FirstResponseSection } from "./components/FirstResponseSection";
 
 function subscribeToDarkMode(callback: () => void) {
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -28,6 +29,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
+  // The team list the shown result was computed with, not the form's current value.
+  const [resultTeam, setResultTeam] = useState<string[]>([]);
   const [defaults, setDefaults] = useState<AppDefaults | undefined>(undefined);
 
   useEffect(() => {
@@ -48,6 +51,12 @@ export default function App() {
     try {
       const data = await fetchAnalysis(values);
       setResult(data);
+      setResultTeam(
+        values.team
+          .split(",")
+          .map((member) => member.trim())
+          .filter(Boolean),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
@@ -140,6 +149,12 @@ export default function App() {
               <SummaryCards data={result} />
               {result.dataSource && <DataSourceNote dataSource={result.dataSource} />}
             </div>
+
+            <FirstResponseSection
+              summary={result.firstResponse}
+              teamMembers={resultTeam}
+              isDark={isDark}
+            />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-2 bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-gray-200 dark:border-slate-800 p-6">

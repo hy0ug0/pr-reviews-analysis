@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import type { AppSuggestion, PRReview } from "../shared/types.ts";
+import { COMMENTS_PAGE_SIZE, type AppSuggestion, type PRReview } from "../shared/types.ts";
 import { createLogger } from "./logger.ts";
 import {
   batchAlias,
@@ -34,7 +34,7 @@ const DAY_IN_MS = 24 * 60 * 60 * 1000;
 // The review fields every query that returns reviews selects.
 const REVIEW_FIELDS = `
 fragment ReviewFields on PullRequestReview {
-  author { login }
+  author { login __typename }
   state
   submittedAt
   body
@@ -53,13 +53,26 @@ fragment PullRequestFields on PullRequest {
   updatedAt
   mergedAt
   closedAt
+  isDraft
   author { login }
+  timelineItems(itemTypes: [READY_FOR_REVIEW_EVENT], first: 1) {
+    nodes {
+      ... on ReadyForReviewEvent { createdAt }
+    }
+  }
   reviews(first: ${INLINE_REVIEW_PAGE_SIZE}) {
     pageInfo {
       hasNextPage
       endCursor
     }
     nodes { ...ReviewFields }
+  }
+  comments(first: ${COMMENTS_PAGE_SIZE}) {
+    pageInfo { hasNextPage }
+    nodes {
+      author { login __typename }
+      createdAt
+    }
   }
 }
 ${REVIEW_FIELDS}`;
