@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   analysisReducer,
+  CACHE_ONLY_PROGRESS_PANEL_DELAY_MS,
   createAnalysisRunner,
   initialAnalysisState,
+  PROGRESS_PANEL_DELAY_MS,
+  progressPanelDueAt,
   type AnalysisEvent,
   type AnalysisState,
   type StreamAnalysis,
@@ -39,6 +42,8 @@ function fetching(prsDone: number, prsTotal: number): AnalysisProgress {
     repoCount: 1,
     prsDone,
     prsTotal,
+    repoPRsDone: prsDone,
+    repoPRsTotal: prsTotal,
     batchesDone: 0,
     batchesTotal: 1,
     reviewPRsDone: 0,
@@ -58,6 +63,7 @@ describe("analysisReducer", () => {
       error: null,
       progress: null,
       startedAt: null,
+      sawGitHubWork: false,
     });
   });
 
@@ -127,6 +133,68 @@ describe("analysisReducer", () => {
     const idle: AnalysisState = initialAnalysisState;
 
     expect(analysisReducer(idle, { kind: "progressed", progress: fetching(1, 2) })).toBe(idle);
+  });
+});
+
+describe("progressPanelDueAt", () => {
+  const listingOnGitHub: AnalysisProgress = {
+    phase: "listing",
+    repo: "acme/a",
+    repoIndex: 0,
+    repoCount: 1,
+    listed: 0,
+    matching: null,
+    page: 0,
+    windowsDone: 0,
+    windowsTotal: 1,
+  };
+
+  test("a full cache hit that ends at 310 ms never reaches the panel", () => {
+    // Started at 1000; only cache steps reported before the result.
+    const cacheOnly = run(
+      started,
+      { kind: "progressed", progress: { phase: "listing-cache" } },
+      { kind: "progressed", progress: { phase: "pr-cache", prs: 592 } },
+    );
+    const dueAt = progressPanelDueAt(cacheOnly) ?? 0;
+
+    expect(dueAt > 1310).toBe(true);
+    expect(dueAt).toBe(1000 + CACHE_ONLY_PROGRESS_PANEL_DELAY_MS);
+    expect(
+      progressPanelDueAt(
+        analysisReducer(cacheOnly, {
+          kind: "succeeded",
+          values: formValues("acme/a"),
+          result: resultA,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  test("GitHub work brings the panel in after the short delay", () => {
+    const listing = run(started, { kind: "progressed", progress: listingOnGitHub });
+
+    expect(progressPanelDueAt(listing)).toBe(1000 + PROGRESS_PANEL_DELAY_MS);
+  });
+
+  test("once GitHub work is seen, later cache steps keep the short delay", () => {
+    const state = run(
+      started,
+      { kind: "progressed", progress: listingOnGitHub },
+      { kind: "progressed", progress: { phase: "pr-cache", prs: 3 } },
+    );
+
+    expect(state.sawGitHubWork).toBe(true);
+  });
+
+  test("a new run starts over from the long delay", () => {
+    const state = run(
+      started,
+      { kind: "progressed", progress: listingOnGitHub },
+      { kind: "started", at: 5000 },
+    );
+
+    expect(progressPanelDueAt(state)).toBe(5000 + CACHE_ONLY_PROGRESS_PANEL_DELAY_MS);
   });
 });
 

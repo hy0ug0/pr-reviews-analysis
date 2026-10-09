@@ -201,6 +201,8 @@ export const analysisProgressSchema = z.discriminatedUnion("phase", [
     ...repoPositionShape,
     prsDone: z.number(),
     prsTotal: z.number(),
+    repoPRsDone: z.number(),
+    repoPRsTotal: z.number(),
     batchesDone: z.number(),
     batchesTotal: z.number(),
     reviewPRsDone: z.number(),

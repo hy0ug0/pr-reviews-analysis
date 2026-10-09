@@ -136,8 +136,9 @@ export type AnalysisProgress =
     }
   // Matching the listed PRs against the PR cache.
   | { phase: "pr-cache"; prs: number }
-  // Fetching the PRs the cache could not serve. PR counts cover every repo; batches and
-  // extra review pages cover the current one. reviewPRsTotal is null until its batches end.
+  // Fetching the PRs the cache could not serve. prsDone and prsTotal cover every repo; the
+  // repo counts, batches and extra review pages cover the current one. reviewPRsTotal is
+  // null until its batches end.
   | {
       phase: "fetching";
       repo: string;
@@ -145,6 +146,8 @@ export type AnalysisProgress =
       repoCount: number;
       prsDone: number;
       prsTotal: number;
+      repoPRsDone: number;
+      repoPRsTotal: number;
       batchesDone: number;
       batchesTotal: number;
       reviewPRsDone: number;

@@ -38,6 +38,33 @@ function ratio(done: number, total: number): number {
   return total === 0 ? 1 : done / total;
 }
 
+// Within one repo's fetch, the batches' share; the extra review pages that follow them get
+// the rest. Measured on nodejs/node, review continuations are a few percent of the calls.
+const BATCHES_SHARE = 0.85;
+
+// How far the fetch step is. Each repo weighs its PR count. Within a repo, batches fill
+// BATCHES_SHARE, then the extra review pages the rest. Between the last batch and the count
+// of PRs needing more pages, the share is null (indeterminate) from where the batches ended.
+function fetchShare(progress: Extract<AnalysisProgress, { phase: "fetching" }>): {
+  share: number | null;
+  floorShare: number;
+} {
+  const { prsDone, prsTotal, repoPRsDone, repoPRsTotal, reviewPRsDone, reviewPRsTotal } = progress;
+  if (prsTotal === 0) return { share: 1, floorShare: 1 };
+  const prsBefore = prsDone - repoPRsDone;
+  const overall = (repoShare: number) => (prsBefore + repoPRsTotal * repoShare) / prsTotal;
+  const batchesShare = BATCHES_SHARE * ratio(repoPRsDone, repoPRsTotal);
+  if (repoPRsDone < repoPRsTotal) {
+    return { share: overall(batchesShare), floorShare: overall(batchesShare) };
+  }
+  if (reviewPRsTotal === null) return { share: null, floorShare: overall(BATCHES_SHARE) };
+  const reviewsShare = (1 - BATCHES_SHARE) * ratio(reviewPRsDone, reviewPRsTotal);
+  return {
+    share: overall(BATCHES_SHARE + reviewsShare),
+    floorShare: overall(BATCHES_SHARE + reviewsShare),
+  };
+}
+
 function repoDetails(progress: { repo: string; repoIndex: number; repoCount: number }) {
   const { repo, repoIndex, repoCount } = progress;
   return repoCount > 1 ? [repo, `repo ${repoIndex + 1} of ${repoCount}`] : [repo];
@@ -92,12 +119,19 @@ export function describeProgress(progress: AnalysisProgress): ProgressView {
     case "fetching": {
       const { prsDone, prsTotal, batchesDone, batchesTotal, reviewPRsDone, reviewPRsTotal } =
         progress;
-      const share = ratio(prsDone, prsTotal);
-      if (batchesDone === batchesTotal && reviewPRsTotal !== null && reviewPRsTotal > 0) {
-        return view(2, share, "Fetching more reviews", [
-          ...repoDetails(progress),
-          `${reviewPRsDone.toLocaleString()} of ${pluralize(reviewPRsTotal, "PR")}`,
-        ]);
+      const { share, floorShare } = fetchShare(progress);
+      if (batchesDone === batchesTotal && reviewPRsTotal !== 0) {
+        const counts =
+          reviewPRsTotal === null
+            ? []
+            : [`${reviewPRsDone.toLocaleString()} of ${pluralize(reviewPRsTotal, "PR")}`];
+        return view(
+          2,
+          share,
+          "Fetching more reviews",
+          [...repoDetails(progress), ...counts],
+          floorShare,
+        );
       }
       return view(2, share, "Fetching PR details", [
         ...repoDetails(progress),

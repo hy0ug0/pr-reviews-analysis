@@ -54,6 +54,8 @@ const detailsMock = mock(
         repoCount: 1,
         prsDone: index + 1,
         prsTotal: refs.length,
+        repoPRsDone: index + 1,
+        repoPRsTotal: refs.length,
         batchesDone: index + 1,
         batchesTotal: refs.length,
         reviewPRsDone: 0,

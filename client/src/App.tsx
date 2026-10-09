@@ -27,29 +27,23 @@ function useDarkMode() {
   return useSyncExternalStore(subscribeToDarkMode, getIsDark);
 }
 
-// A full cache hit answers in milliseconds; the progress panel waits this long so it does
-// not flash for one.
-const PROGRESS_PANEL_DELAY_MS = 300;
-
-// True once `active` has stayed true for `delayMs`; false again as soon as it turns false.
-function useDelayedFlag(active: boolean, delayMs: number): boolean {
-  const [shown, setShown] = useState(false);
+// True from `dueAt` on; false while dueAt is null.
+function useReached(dueAt: number | null): boolean {
+  const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    if (!active) {
-      setShown(false);
-      return;
-    }
-    const timer = setTimeout(() => setShown(true), delayMs);
+    if (dueAt === null) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, dueAt - Date.now()));
     return () => clearTimeout(timer);
-  }, [active, delayMs]);
-  return active && shown;
+  }, [dueAt]);
+  return dueAt !== null && now >= dueAt;
 }
 
 export default function App() {
   const isDark = useDarkMode();
-  const { shown, loading, error, progress, startedAt, analyze, refresh } = useAnalysis();
+  const { shown, loading, error, progress, startedAt, progressPanelDueAt, analyze, refresh } =
+    useAnalysis();
   const result = shown?.result ?? null;
-  const showProgress = useDelayedFlag(loading, PROGRESS_PANEL_DELAY_MS);
+  const showProgress = useReached(progressPanelDueAt);
   const [defaults, setDefaults] = useState<AppDefaults | undefined>(undefined);
 
   useEffect(() => {

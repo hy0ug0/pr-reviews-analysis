@@ -888,7 +888,14 @@ export async function fetchPullRequestDetails(
       fetchBatch: (batch) => fetchPullRequestBatch(repo, batch, run),
       fetchContinuation: (pr) =>
         fetchPullRequestReviews(repo, pr.number, pr.reviews.pageInfo.endCursor, run),
-      onProgress: ({ prsDone, batchesDone, batchesTotal, reviewPRsDone, reviewPRsTotal }) =>
+      onProgress: ({
+        prsDone,
+        prsTotal,
+        batchesDone,
+        batchesTotal,
+        reviewPRsDone,
+        reviewPRsTotal,
+      }) =>
         run.report({
           phase: "fetching",
           repo,
@@ -896,6 +903,8 @@ export async function fetchPullRequestDetails(
           repoCount,
           prsDone: prsBefore + prsDone,
           prsTotal: refs.length,
+          repoPRsDone: prsDone,
+          repoPRsTotal: prsTotal,
           batchesDone,
           batchesTotal,
           reviewPRsDone,

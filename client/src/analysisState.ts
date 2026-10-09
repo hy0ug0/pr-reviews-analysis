@@ -26,6 +26,9 @@ export interface AnalysisState {
   progress: RunProgress | null;
   // When the running analysis started, in epoch ms; null when none is running.
   startedAt: number | null;
+  // Whether the running analysis has listed or fetched on GitHub, rather than only read the
+  // cache. Decides how soon the progress panel shows.
+  sawGitHubWork: boolean;
 }
 
 export type AnalysisEvent =
@@ -40,7 +43,23 @@ export const initialAnalysisState: AnalysisState = {
   error: null,
   progress: null,
   startedAt: null,
+  sawGitHubWork: false,
 };
+
+// The progress panel shows once a run has done GitHub work for this long. A run that only
+// reads the cache usually ends within it, so the panel would flash; such a run gets the
+// longer delay, which still gives feedback when a big cache read takes a while.
+export const PROGRESS_PANEL_DELAY_MS = 300;
+export const CACHE_ONLY_PROGRESS_PANEL_DELAY_MS = 1500;
+
+// When the progress panel should appear, in epoch ms; null when no run is going.
+export function progressPanelDueAt(state: AnalysisState): number | null {
+  if (!state.loading || state.startedAt === null) return null;
+  return (
+    state.startedAt +
+    (state.sawGitHubWork ? PROGRESS_PANEL_DELAY_MS : CACHE_ONLY_PROGRESS_PANEL_DELAY_MS)
+  );
+}
 
 function advance(previous: RunProgress | null, progress: AnalysisProgress): RunProgress {
   const view = describeProgress(progress);
@@ -57,10 +76,24 @@ function advance(previous: RunProgress | null, progress: AnalysisProgress): RunP
 export function analysisReducer(state: AnalysisState, event: AnalysisEvent): AnalysisState {
   switch (event.kind) {
     case "started":
-      return { ...state, loading: true, error: null, progress: null, startedAt: event.at };
+      return {
+        ...state,
+        loading: true,
+        error: null,
+        progress: null,
+        startedAt: event.at,
+        sawGitHubWork: false,
+      };
     case "progressed":
       if (!state.loading) return state;
-      return { ...state, progress: advance(state.progress, event.progress) };
+      return {
+        ...state,
+        progress: advance(state.progress, event.progress),
+        sawGitHubWork:
+          state.sawGitHubWork ||
+          event.progress.phase === "listing" ||
+          event.progress.phase === "fetching",
+      };
     case "succeeded":
       return {
         shown: { result: event.result, values: event.values, team: parseList(event.values.team) },
@@ -68,9 +101,17 @@ export function analysisReducer(state: AnalysisState, event: AnalysisEvent): Ana
         error: null,
         progress: null,
         startedAt: null,
+        sawGitHubWork: false,
       };
     case "failed":
-      return { ...state, loading: false, error: event.message, progress: null, startedAt: null };
+      return {
+        ...state,
+        loading: false,
+        error: event.message,
+        progress: null,
+        startedAt: null,
+        sawGitHubWork: false,
+      };
     default: {
       const _exhaustive: never = event;
       return _exhaustive;

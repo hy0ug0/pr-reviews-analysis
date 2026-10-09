@@ -18,6 +18,14 @@ test("joins multi-line data and defaults the event name to message", () => {
   expect(parse("data: one\ndata: two\n\n")).toEqual([{ event: "message", data: "one\ntwo" }]);
 });
 
+test("keeps a CRLF split across chunks as one line end", () => {
+  const parse = createSseParser();
+
+  expect(parse("event: result\r")).toEqual([]);
+  expect(parse("\ndata: payload\r\n\r")).toEqual([]);
+  expect(parse("\n")).toEqual([{ event: "result", data: "payload" }]);
+});
+
 test("accepts CRLF line ends", () => {
   const parse = createSseParser();
 

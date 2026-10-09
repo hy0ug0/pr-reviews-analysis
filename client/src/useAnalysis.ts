@@ -1,6 +1,11 @@
 import { useEffect, useReducer, useState } from "react";
 import { streamAnalysis } from "./api";
-import { analysisReducer, createAnalysisRunner, initialAnalysisState } from "./analysisState";
+import {
+  analysisReducer,
+  createAnalysisRunner,
+  initialAnalysisState,
+  progressPanelDueAt,
+} from "./analysisState";
 import type { AnalyzeFormValues } from "./types";
 
 // Runs analyses and holds what the page shows: the current result and the values behind it,
@@ -20,5 +25,5 @@ export function useAnalysis() {
     if (state.shown) void runner.run({ ...state.shown.values, skipCache: true });
   };
 
-  return { ...state, analyze, refresh };
+  return { ...state, progressPanelDueAt: progressPanelDueAt(state), analyze, refresh };
 }
