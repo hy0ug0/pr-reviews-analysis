@@ -28,8 +28,82 @@ export type FetchedPullRequest =
 type FailedPullRequest = Extract<FetchedPullRequest, { kind: "failed" }>;
 type BatchItem = { kind: "node"; node: PullRequestNode } | FailedPullRequest;
 
-// Returns one entry per requested number, in the same order; null when GitHub has no such PR.
-export type FetchPullRequestBatch = (numbers: number[]) => Promise<Array<PullRequestNode | null>>;
+// One requested PR in a batch response: its node, or why it has none.
+export type BatchEntry =
+  | { kind: "node"; node: PullRequestNode }
+  | { kind: "failed"; reason: string };
+
+// Returns one entry per requested number, in the same order.
+export type FetchPullRequestBatch = (numbers: number[]) => Promise<BatchEntry[]>;
+
+export interface GraphqlError {
+  message: string;
+  path?: Array<string | number>;
+}
+
+// A batch query response, possibly partial: GitHub returns data for the aliases it could
+// resolve and an error, with the alias in its path, for each one it could not.
+export interface PullRequestBatchResponse {
+  data: { repository: Record<string, PullRequestNode | null> | null } | null;
+  errors?: GraphqlError[];
+}
+
+export function batchAlias(number: number): string {
+  return `pr${number}`;
+}
+
+// Maps a batch response to one entry per number. An error under an alias fails only that
+// PR, even if the alias also has data, since that data may be incomplete.
+export function readPullRequestBatch({
+  repo,
+  numbers,
+  response,
+}: {
+  repo: string;
+  numbers: number[];
+  response: PullRequestBatchResponse;
+}): BatchEntry[] {
+  const errors = response.errors ?? [];
+  const repository = response.data?.repository;
+  if (!repository) {
+    const messages = errors.map((error) => error.message).join(", ");
+    throw new Error(messages || `Repository ${repo} was not found.`);
+  }
+
+  const aliases = new Set(numbers.map(batchAlias));
+  const errorsByAlias = new Map<string, string[]>();
+  const unattributed: string[] = [];
+  for (const error of errors) {
+    const alias = error.path?.find(
+      (segment): segment is string => typeof segment === "string" && aliases.has(segment),
+    );
+    if (alias === undefined) {
+      unattributed.push(error.message);
+      continue;
+    }
+    errorsByAlias.set(alias, [...(errorsByAlias.get(alias) ?? []), error.message]);
+  }
+
+  return numbers.map((number): BatchEntry => {
+    const alias = batchAlias(number);
+    const aliasErrors = errorsByAlias.get(alias);
+    if (aliasErrors) {
+      return {
+        kind: "failed",
+        reason: `Failed to fetch ${repo}#${number}: ${aliasErrors.join(", ")}`,
+      };
+    }
+    const node = repository[alias];
+    if (node) return { kind: "node", node };
+    if (unattributed.length > 0) {
+      return {
+        kind: "failed",
+        reason: `Failed to fetch ${repo}#${number}: ${unattributed.join(", ")}`,
+      };
+    }
+    return { kind: "failed", reason: `Pull request ${repo}#${number} was not found.` };
+  });
+}
 
 function chunk<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -68,17 +142,24 @@ export async function fetchPullRequestsInBatches({
     concurrency,
     async (batch): Promise<BatchItem[]> => {
       try {
-        const nodes = await fetchBatch(batch);
+        const entries = await fetchBatch(batch);
         completedBatches++;
-        log.info(`Batch progress for ${repo}: ${completedBatches}/${batches.length} completed`);
+        const failed = entries.filter((entry) => entry.kind === "failed").length;
+        log.info(
+          `Batch progress for ${repo}: ${completedBatches}/${batches.length} completed${failed > 0 ? ` (${failed} PRs failed)` : ""}`,
+        );
         return batch.map((number, index): BatchItem => {
-          const node = nodes[index];
-          if (node) return { kind: "node", node };
-          return {
-            kind: "failed",
-            number,
-            reason: `Pull request ${repo}#${number} was not found.`,
-          };
+          const entry = entries[index];
+          switch (entry.kind) {
+            case "node":
+              return entry;
+            case "failed":
+              return { kind: "failed", number, reason: entry.reason };
+            default: {
+              const _exhaustive: never = entry;
+              return _exhaustive;
+            }
+          }
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "Unknown batch fetch error";

@@ -2,17 +2,17 @@ import { execFile } from "node:child_process";
 import type { AppSuggestion, PRReview } from "../shared/types.ts";
 import { createLogger } from "./logger.ts";
 import {
+  batchAlias,
   fetchPullRequestsInBatches,
   pullRequestKey,
+  readPullRequestBatch,
+  type BatchEntry,
   type FetchedPullRequest,
+  type GraphqlError,
+  type PullRequestBatchResponse,
   type PullRequestRef,
 } from "./pull-request-details.ts";
-import {
-  uniqueReasons,
-  type PageInfo,
-  type PullRequestNode,
-  type ReviewConnection,
-} from "./review-pages.ts";
+import { uniqueReasons, type PageInfo, type ReviewConnection } from "./review-pages.ts";
 
 const log = createLogger("fetch");
 
@@ -115,10 +115,6 @@ ${fields}
 ${PULL_REQUEST_FIELDS}`;
 }
 
-function batchAlias(number: number): string {
-  return `pr${number}`;
-}
-
 const REPOSITORY_SEARCH_QUERY = `
 query($searchQuery: String!, $first: Int!) {
   search(query: $searchQuery, type: REPOSITORY, first: $first) {
@@ -185,10 +181,6 @@ interface ListingResponse {
     pageInfo: PageInfo;
     nodes: ListedPullRequestNode[];
   };
-}
-
-interface PullRequestBatchResponse {
-  repository: Record<string, PullRequestNode | null> | null;
 }
 
 interface ReviewsResponse {
@@ -273,27 +265,34 @@ type GraphqlVariable = boolean | number | string | null | undefined;
 
 interface GraphqlResponse<T> {
   data: T;
-  errors?: Array<{ message: string }>;
+  errors?: GraphqlError[];
+}
+
+const GH_NOT_FOUND_MESSAGE = "GitHub CLI (gh) not found. Install from https://cli.github.com";
+
+function buildGraphqlArgs(query: string, variables: Record<string, GraphqlVariable>): string[] {
+  const args = ["api", "graphql", "-f", `query=${query}`];
+
+  for (const [key, value] of Object.entries(variables)) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === "number" || typeof value === "boolean") {
+      args.push("-F", `${key}=${value}`);
+    } else {
+      args.push("-f", `${key}=${String(value)}`);
+    }
+  }
+  return args;
 }
 
 function ghGraphql<T>(query: string, variables: Record<string, GraphqlVariable> = {}): Promise<T> {
   return new Promise((resolve, reject) => {
-    const args = ["api", "graphql", "-f", `query=${query}`];
-
-    for (const [key, value] of Object.entries(variables)) {
-      if (value === undefined || value === null) continue;
-      if (typeof value === "number" || typeof value === "boolean") {
-        args.push("-F", `${key}=${value}`);
-      } else {
-        args.push("-f", `${key}=${String(value)}`);
-      }
-    }
+    const args = buildGraphqlArgs(query, variables);
 
     execFile("gh", args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const message = String(stderr || err.message);
         if (err.code === "ENOENT") {
-          reject(new Error("GitHub CLI (gh) not found. Install from https://cli.github.com"));
+          reject(new Error(GH_NOT_FOUND_MESSAGE));
         } else {
           reject(new Error(message));
         }
@@ -303,7 +302,7 @@ function ghGraphql<T>(query: string, variables: Record<string, GraphqlVariable> 
       try {
         const response: GraphqlResponse<T> = JSON.parse(String(stdout));
         if (response.errors?.length) {
-          reject(new Error(response.errors.map((e: { message: string }) => e.message).join(", ")));
+          reject(new Error(response.errors.map((e) => e.message).join(", ")));
           return;
         }
         resolve(response.data);
@@ -314,16 +313,49 @@ function ghGraphql<T>(query: string, variables: Record<string, GraphqlVariable> 
   });
 }
 
-async function ghGraphqlWithRetry<T>(
+// Unlike ghGraphql, resolves with partial data and its errors. gh exits non-zero when the
+// response has errors but still prints it, so stdout is parsed either way. Rejects only when
+// there is no data at all.
+function ghGraphqlPartial<T>(
   query: string,
   variables: Record<string, GraphqlVariable> = {},
-): Promise<T> {
+): Promise<{ data: T | null; errors?: GraphqlError[] }> {
+  return new Promise((resolve, reject) => {
+    const args = buildGraphqlArgs(query, variables);
+
+    execFile("gh", args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err?.code === "ENOENT") {
+        reject(new Error(GH_NOT_FOUND_MESSAGE));
+        return;
+      }
+
+      let response: GraphqlResponse<T | null> | null = null;
+      try {
+        response = JSON.parse(String(stdout));
+      } catch {
+        // Handled below with gh's own error message.
+      }
+      if (response?.data) {
+        resolve(response);
+        return;
+      }
+      const messages = response?.errors?.map((e) => e.message).join(", ");
+      reject(
+        new Error(
+          messages || (err ? String(stderr || err.message) : "Failed to parse GitHub API response"),
+        ),
+      );
+    });
+  });
+}
+
+async function withGraphqlRetry<T>(run: () => Promise<T>): Promise<T> {
   let attempt = 0;
   let lastError: Error | null = null;
 
   while (attempt < GRAPHQL_MAX_ATTEMPTS) {
     try {
-      return await ghGraphql<T>(query, variables);
+      return await run();
     } catch (error: unknown) {
       attempt++;
       lastError = error instanceof Error ? error : new Error("Unknown GitHub GraphQL error");
@@ -339,6 +371,13 @@ async function ghGraphqlWithRetry<T>(
   }
 
   throw lastError ?? new Error("GitHub GraphQL request failed");
+}
+
+function ghGraphqlWithRetry<T>(
+  query: string,
+  variables: Record<string, GraphqlVariable> = {},
+): Promise<T> {
+  return withGraphqlRetry(() => ghGraphql<T>(query, variables));
 }
 
 function delay(ms: number): Promise<void> {
@@ -710,18 +749,15 @@ async function fetchPullRequestReviews(
   return reviews;
 }
 
-async function fetchPullRequestBatch(
-  repo: string,
-  numbers: number[],
-): Promise<Array<PullRequestNode | null>> {
+async function fetchPullRequestBatch(repo: string, numbers: number[]): Promise<BatchEntry[]> {
   const { owner, name } = parseRepo(repo);
-  const data = await ghGraphqlWithRetry<PullRequestBatchResponse>(
-    buildPullRequestBatchQuery(numbers),
-    { owner, name },
+  const response = await withGraphqlRetry(() =>
+    ghGraphqlPartial<NonNullable<PullRequestBatchResponse["data"]>>(
+      buildPullRequestBatchQuery(numbers),
+      { owner, name },
+    ),
   );
-  const repository = data.repository;
-  if (!repository) throw new Error(`Repository ${repo} was not found.`);
-  return numbers.map((number) => repository[batchAlias(number)] ?? null);
+  return readPullRequestBatch({ repo, numbers, response });
 }
 
 // Lists the PRs created in the range. Oversized windows are split to get past the

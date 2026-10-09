@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { PRReview } from "../shared/types.ts";
 import {
+  batchAlias,
   fetchPullRequestsInBatches,
   pullRequestKey,
+  readPullRequestBatch,
+  type BatchEntry,
   type FetchPullRequestBatch,
+  type PullRequestBatchResponse,
 } from "./pull-request-details.ts";
 import type { FetchReviewContinuation, PullRequestNode } from "./review-pages.ts";
 
@@ -40,19 +44,45 @@ const noContinuation: FetchReviewContinuation = async () => {
   throw new Error("unexpected continuation");
 };
 
+// What GitHub returns for a batch query when the given nodes exist: data for those aliases,
+// and a NOT_FOUND error with the alias in its path for every other number.
+function makeBatchResponse(numbers: number[], nodes: PullRequestNode[]): PullRequestBatchResponse {
+  const byNumber = new Map(nodes.map((node) => [node.number, node]));
+  const repository: Record<string, PullRequestNode | null> = {};
+  const errors: NonNullable<PullRequestBatchResponse["errors"]> = [];
+  for (const number of numbers) {
+    const node = byNumber.get(number) ?? null;
+    repository[batchAlias(number)] = node;
+    if (!node) {
+      errors.push({
+        message: `Could not resolve to a PullRequest with the number of ${number}.`,
+        path: ["repository", batchAlias(number)],
+      });
+    }
+  }
+  return errors.length > 0 ? { data: { repository }, errors } : { data: { repository } };
+}
+
 function fetchBatchFrom(nodes: PullRequestNode[]): {
   fetchBatch: FetchPullRequestBatch;
   batches: number[][];
 } {
-  const byNumber = new Map(nodes.map((node) => [node.number, node]));
   const batches: number[][] = [];
   return {
     batches,
     fetchBatch: async (numbers) => {
       batches.push(numbers);
-      return numbers.map((number) => byNumber.get(number) ?? null);
+      return readPullRequestBatch({
+        repo: REPO,
+        numbers,
+        response: makeBatchResponse(numbers, nodes),
+      });
     },
   };
+}
+
+function found(node: PullRequestNode): BatchEntry {
+  return { kind: "node", node };
 }
 
 describe("pullRequestKey", () => {
@@ -110,14 +140,25 @@ describe("fetchPullRequestsInBatches", () => {
       concurrency: 1,
       fetchBatch: async (numbers) => {
         if (numbers.includes(3)) throw new Error("rate limited");
-        return numbers.map((number) => (number === 2 ? null : makeNode(number)));
+        return readPullRequestBatch({
+          repo: REPO,
+          numbers,
+          response: makeBatchResponse(
+            numbers,
+            numbers.filter((number) => number !== 2).map((number) => makeNode(number)),
+          ),
+        });
       },
       fetchContinuation: noContinuation,
     });
 
     expect(result).toEqual([
       { kind: "complete", pullRequest: expect.objectContaining({ number: 1 }) },
-      { kind: "failed", number: 2, reason: `Pull request ${REPO}#2 was not found.` },
+      {
+        kind: "failed",
+        number: 2,
+        reason: `Failed to fetch ${REPO}#2: Could not resolve to a PullRequest with the number of 2.`,
+      },
       { kind: "failed", number: 3, reason: `Failed to fetch ${REPO}#3: rate limited` },
       { kind: "failed", number: 4, reason: `Failed to fetch ${REPO}#4: rate limited` },
     ]);
@@ -171,7 +212,7 @@ describe("fetchPullRequestsInBatches", () => {
         maxInFlight = Math.max(maxInFlight, inFlight);
         await Promise.resolve();
         inFlight--;
-        return numbers.map((number) => makeNode(number));
+        return numbers.map((number) => found(makeNode(number)));
       },
       fetchContinuation: noContinuation,
     });
@@ -193,5 +234,71 @@ describe("fetchPullRequestsInBatches", () => {
 
     expect(result).toEqual([]);
     expect(batches).toEqual([]);
+  });
+});
+
+describe("readPullRequestBatch", () => {
+  const numbers = Array.from({ length: 50 }, (_, index) => index + 1);
+
+  test("keeps the 49 resolved PRs and fails only the one with an error", () => {
+    const response = makeBatchResponse(
+      numbers,
+      numbers.filter((number) => number !== 17).map((number) => makeNode(number)),
+    );
+
+    const entries = readPullRequestBatch({ repo: REPO, numbers, response });
+
+    expect(entries.filter((entry) => entry.kind === "node")).toHaveLength(49);
+    expect(entries[16]).toEqual({
+      kind: "failed",
+      reason: `Failed to fetch ${REPO}#17: Could not resolve to a PullRequest with the number of 17.`,
+    });
+    expect(entries[0]).toEqual(found(makeNode(1)));
+    expect(entries[49]).toEqual(found(makeNode(50)));
+  });
+
+  test("fails a PR whose alias has data but also an error under it", () => {
+    const response: PullRequestBatchResponse = {
+      data: { repository: { [batchAlias(1)]: makeNode(1), [batchAlias(2)]: makeNode(2) } },
+      errors: [{ message: "Something went wrong", path: ["repository", batchAlias(2), "reviews"] }],
+    };
+
+    expect(readPullRequestBatch({ repo: REPO, numbers: [1, 2], response })).toEqual([
+      found(makeNode(1)),
+      { kind: "failed", reason: `Failed to fetch ${REPO}#2: Something went wrong` },
+    ]);
+  });
+
+  test("reports an error without an alias on PRs that have no data", () => {
+    const response: PullRequestBatchResponse = {
+      data: { repository: { [batchAlias(1)]: makeNode(1), [batchAlias(2)]: null } },
+      errors: [{ message: "Timeout" }],
+    };
+
+    expect(readPullRequestBatch({ repo: REPO, numbers: [1, 2], response })).toEqual([
+      found(makeNode(1)),
+      { kind: "failed", reason: `Failed to fetch ${REPO}#2: Timeout` },
+    ]);
+  });
+
+  test("reports a PR missing without any error as not found", () => {
+    const response: PullRequestBatchResponse = {
+      data: { repository: { [batchAlias(1)]: null } },
+    };
+
+    expect(readPullRequestBatch({ repo: REPO, numbers: [1], response })).toEqual([
+      { kind: "failed", reason: `Pull request ${REPO}#1 was not found.` },
+    ]);
+  });
+
+  test("throws when the repository itself did not resolve", () => {
+    const response: PullRequestBatchResponse = {
+      data: { repository: null },
+      errors: [{ message: "Could not resolve to a Repository", path: ["repository"] }],
+    };
+
+    expect(() => readPullRequestBatch({ repo: REPO, numbers: [1], response })).toThrow(
+      "Could not resolve to a Repository",
+    );
   });
 });
