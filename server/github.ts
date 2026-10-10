@@ -1,7 +1,8 @@
-import { execFile, type ExecFileException } from "node:child_process";
+import { z } from "zod";
 import { GITHUB_EPOCH_DATE, todayUtc } from "../shared/schemas.ts";
 import type { AppSuggestion } from "../shared/types.ts";
 import type { GitHubRun } from "./github-run.ts";
+import { githubToken, type TokenProvider } from "./github-token.ts";
 import { uniqueReasons } from "./lib/partial-reasons.ts";
 import { createLogger } from "./logger.ts";
 import {
@@ -73,7 +74,7 @@ query($owner: String!, $name: String!, $number: Int!, $first: Int!, $after: Stri
 }
 ${REVIEW_FIELDS}`;
 
-// One aliased pullRequest field per number, so a single call fetches a whole batch.
+// One aliased pullRequest field per number, so a single request fetches a whole batch.
 function buildPullRequestBatchQuery(numbers: number[]): string {
   const fields = numbers
     .map(
@@ -238,143 +239,295 @@ export interface PullRequestListing {
 }
 
 type GraphqlVariable = boolean | number | string | null | undefined;
+type GraphqlVariables = Record<string, GraphqlVariable>;
 
-interface GraphqlResponse<T> {
+export interface GraphqlResponse<T> {
   data: T;
   errors?: GraphqlError[];
 }
 
-const GH_NOT_FOUND_MESSAGE = "GitHub CLI (gh) not found. Install from https://cli.github.com";
+const GITHUB_GRAPHQL_URL = "https://api.github.com/graphql";
+const REQUEST_DEADLINE_MS = 30_000;
+// A secondary rate limit answers without a reset time; GitHub's docs say to wait a minute.
+const SECONDARY_RATE_LIMIT_WAIT_MS = 60_000;
+// Longer waits fail at once: the user is better told when the limit resets.
+const MAX_RATE_LIMIT_WAIT_MS = 60_000;
+const TOKEN_REJECTED_MESSAGE = "GitHub rejected the token. Run: gh auth login";
+const TRANSIENT_HTTP_STATUSES = new Set([500, 502, 503, 504]);
 
-function buildGraphqlArgs(query: string, variables: Record<string, GraphqlVariable>): string[] {
-  const args = ["api", "graphql", "-f", `query=${query}`];
+// What GitHub sends back, before `data` is trusted as the query's type.
+const graphqlEnvelopeSchema = z.object({
+  data: z.unknown().optional(),
+  errors: z
+    .array(
+      z.object({
+        message: z.string(),
+        type: z.string().optional(),
+        path: z.array(z.union([z.string(), z.number()])).optional(),
+      }),
+    )
+    .optional(),
+});
 
-  for (const [key, value] of Object.entries(variables)) {
-    if (value === undefined || value === null) continue;
-    if (typeof value === "number" || typeof value === "boolean") {
-      args.push("-F", `${key}=${value}`);
-    } else {
-      args.push("-f", `${key}=${String(value)}`);
-    }
-  }
-  return args;
+type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
+
+export interface GitHubClientOptions {
+  fetch?: FetchLike;
+  tokenProvider?: TokenProvider;
+  sleep?: (ms: number) => Promise<void>;
+  // Epoch milliseconds, for rate-limit reset headers.
+  now?: () => number;
+  deadlineMs?: number;
 }
 
-type GhCallback = (error: ExecFileException | null, stdout: string, stderr: string) => void;
-
-// Every gh call goes through here, so a run counts each one, retries and failures included.
-function spawnGh(args: string[], run: GitHubRun | undefined, callback: GhCallback) {
-  if (run) run.requests++;
-  execFile("gh", args, { maxBuffer: 10 * 1024 * 1024 }, callback);
+export interface GitHubClient {
+  // Resolves with the query's data; any GraphQL error rejects.
+  query<T>(query: string, variables?: GraphqlVariables, run?: GitHubRun): Promise<T>;
+  // Resolves with whatever data came back and its errors, as a batch query can answer
+  // some aliases and fail others. Rejects only when there is no data at all.
+  queryPartial<T>(
+    query: string,
+    variables: GraphqlVariables,
+    run?: GitHubRun,
+  ): Promise<GraphqlResponse<T>>;
 }
 
-function ghGraphql<T>(
-  query: string,
-  variables: Record<string, GraphqlVariable> = {},
-  run?: GitHubRun,
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const args = buildGraphqlArgs(query, variables);
-
-    spawnGh(args, run, (err, stdout, stderr) => {
-      if (err) {
-        const message = stderr || err.message;
-        if (err.code === "ENOENT") {
-          reject(new Error(GH_NOT_FOUND_MESSAGE));
-        } else {
-          reject(new Error(message));
-        }
-        return;
-      }
-
-      try {
-        const response: GraphqlResponse<T> = JSON.parse(stdout);
-        if (response.errors?.length) {
-          reject(new Error(response.errors.map((e) => e.message).join(", ")));
-          return;
-        }
-        resolve(response.data);
-      } catch {
-        reject(new Error("Failed to parse GitHub API response"));
-      }
-    });
-  });
-}
-
-// Unlike ghGraphql, resolves with partial data and its errors. gh exits non-zero when the
-// response has errors but still prints it, so stdout is parsed either way. Rejects only when
-// there is no data at all.
-function ghGraphqlPartial<T>(
-  query: string,
-  variables: Record<string, GraphqlVariable>,
-  run: GitHubRun,
-): Promise<{ data: T | null; errors?: GraphqlError[] }> {
-  return new Promise((resolve, reject) => {
-    const args = buildGraphqlArgs(query, variables);
-
-    spawnGh(args, run, (err, stdout, stderr) => {
-      if (err?.code === "ENOENT") {
-        reject(new Error(GH_NOT_FOUND_MESSAGE));
-        return;
-      }
-
-      let response: GraphqlResponse<T | null> | null = null;
-      try {
-        response = JSON.parse(stdout);
-      } catch {
-        // Handled below with gh's own error message.
-      }
-      if (response?.data) {
-        resolve(response);
-        return;
-      }
-      const messages = response?.errors?.map((e) => e.message).join(", ");
-      reject(
-        new Error(
-          messages || (err ? stderr || err.message : "Failed to parse GitHub API response"),
-        ),
-      );
-    });
-  });
-}
-
-async function withGraphqlRetry<T>(run: () => Promise<T>): Promise<T> {
-  let attempt = 0;
-  let lastError: Error | null = null;
-
-  while (attempt < GRAPHQL_MAX_ATTEMPTS) {
-    try {
-      return await run();
-    } catch (error: unknown) {
-      attempt++;
-      lastError = error instanceof Error ? error : new Error("Unknown GitHub GraphQL error");
-      log.warn(
-        `GraphQL request failed (attempt ${attempt}/${GRAPHQL_MAX_ATTEMPTS}): ${lastError.message}`,
-      );
-      if (attempt >= GRAPHQL_MAX_ATTEMPTS) break;
-
-      const backoffMs = 200 * 2 ** (attempt - 1);
-      log.warn(`Retrying GraphQL request in ${backoffMs}ms`);
-      await delay(backoffMs);
-    }
-  }
-
-  throw lastError ?? new Error("GitHub GraphQL request failed");
-}
-
-function ghGraphqlWithRetry<T>(
-  query: string,
-  variables: Record<string, GraphqlVariable> = {},
-  run?: GitHubRun,
-): Promise<T> {
-  return withGraphqlRetry(() => ghGraphql<T>(query, variables, run));
-}
+// What one HTTP attempt came to. "retry" is a transient failure: a network error, the
+// deadline, a 5xx, a rate limit (with the wait GitHub asks for) or a GraphQL timeout.
+type AttemptOutcome<T> =
+  | { kind: "ok"; response: GraphqlResponse<T> }
+  | { kind: "retry"; error: Error; waitMs?: number }
+  | { kind: "unauthorized" }
+  | { kind: "fail"; error: Error };
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
 }
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatLocalTime(epochMs: number): string {
+  const date = new Date(epochMs);
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
+// Unset variables are left out, so GraphQL sees them as null; numbers and booleans stay typed.
+function buildBody(query: string, variables: GraphqlVariables): string {
+  const defined = Object.fromEntries(
+    Object.entries(variables).filter(([, value]) => value !== undefined && value !== null),
+  );
+  return JSON.stringify({ query, variables: defined });
+}
+
+// 429 always is; 403 only with a rate-limit header, as it is also GitHub's permission error.
+function isRateLimited(status: number, headers: Headers): boolean {
+  if (status === 429) return true;
+  return (
+    status === 403 && (headers.has("retry-after") || headers.get("x-ratelimit-remaining") === "0")
+  );
+}
+
+function rateLimitWaitMs(headers: Headers, nowMs: number): number {
+  const retryAfter = Number(headers.get("retry-after"));
+  if (headers.has("retry-after") && Number.isFinite(retryAfter)) return retryAfter * 1000;
+  const reset = Number(headers.get("x-ratelimit-reset"));
+  if (headers.get("x-ratelimit-remaining") === "0" && Number.isFinite(reset) && reset > 0) {
+    return Math.max(0, reset * 1000 - nowMs);
+  }
+  return SECONDARY_RATE_LIMIT_WAIT_MS;
+}
+
+function rateLimitOutcome<T>(headers: Headers, nowMs: number): AttemptOutcome<T> {
+  const waitMs = rateLimitWaitMs(headers, nowMs);
+  if (waitMs > MAX_RATE_LIMIT_WAIT_MS) {
+    return {
+      kind: "fail",
+      error: new Error(`GitHub rate limit reached, resets at ${formatLocalTime(nowMs + waitMs)}`),
+    };
+  }
+  return { kind: "retry", error: new Error("GitHub rate limit reached"), waitMs };
+}
+
+// GitHub reports a query it gave up on as an error in a 200 response, so the message is
+// the only way to tell it from a validation error.
+function isTransientGraphqlError(error: GraphqlError): boolean {
+  return /timeout/i.test(error.message);
+}
+
+function graphqlErrorsOutcome<T>(
+  errors: GraphqlError[],
+  headers: Headers,
+  nowMs: number,
+): AttemptOutcome<T> {
+  if (errors.some((error) => error.type === "RATE_LIMITED")) {
+    return rateLimitOutcome(headers, nowMs);
+  }
+  const message = errors.map((error) => error.message).join(", ");
+  if (errors.some(isTransientGraphqlError)) return { kind: "retry", error: new Error(message) };
+  return { kind: "fail", error: new Error(message) };
+}
+
+// The body's `message`, as GitHub's HTTP errors carry one. Never the token.
+function describeHttpError(status: number, body: string): string {
+  let detail = "";
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (typeof parsed === "object" && parsed !== null && "message" in parsed) {
+      detail = typeof parsed.message === "string" ? parsed.message : "";
+    }
+  } catch {
+    // Not JSON; the status is enough.
+  }
+  return `GitHub responded with HTTP ${status}${detail ? `: ${detail}` : ""}`;
+}
+
+function classifyResponse<T>(
+  status: number,
+  headers: Headers,
+  body: string,
+  nowMs: number,
+  acceptPartial: boolean,
+): AttemptOutcome<T> {
+  if (status === 401) return { kind: "unauthorized" };
+  if (isRateLimited(status, headers)) return rateLimitOutcome(headers, nowMs);
+  if (TRANSIENT_HTTP_STATUSES.has(status)) {
+    return { kind: "retry", error: new Error(describeHttpError(status, body)) };
+  }
+  if (status < 200 || status >= 300) {
+    return { kind: "fail", error: new Error(describeHttpError(status, body)) };
+  }
+
+  let envelope: z.infer<typeof graphqlEnvelopeSchema>;
+  try {
+    envelope = graphqlEnvelopeSchema.parse(JSON.parse(body));
+  } catch {
+    return { kind: "fail", error: new Error("Failed to parse GitHub API response") };
+  }
+
+  const errors = envelope.errors ?? [];
+  if (envelope.data !== null && envelope.data !== undefined) {
+    // The caller's type is a promise about the query, not something a schema can check here.
+    const data = envelope.data as T;
+    if (errors.length === 0) return { kind: "ok", response: { data } };
+    if (acceptPartial) return { kind: "ok", response: { data, errors } };
+  }
+  if (errors.length === 0) {
+    return { kind: "fail", error: new Error("GitHub API response has no data") };
+  }
+  return graphqlErrorsOutcome(errors, headers, nowMs);
+}
+
+// One POST to the GraphQL endpoint, with `fetch`. The suggestion endpoints pass no run.
+// Tests inject a fake fetch, token, clock and sleep, so no test needs the network or timers.
+export function createGitHubClient({
+  fetch: fetchImpl = fetch,
+  tokenProvider = githubToken,
+  sleep = delay,
+  now = Date.now,
+  deadlineMs = REQUEST_DEADLINE_MS,
+}: GitHubClientOptions = {}): GitHubClient {
+  // Every HTTP attempt goes through here, so a run counts each one, retries included.
+  async function attempt<T>(
+    body: string,
+    token: string,
+    run: GitHubRun | undefined,
+    acceptPartial: boolean,
+  ): Promise<AttemptOutcome<T>> {
+    if (run) run.requests++;
+    // One deadline for the whole exchange, body read included.
+    const signal = AbortSignal.timeout(deadlineMs);
+    let response: Response;
+    let text: string;
+    try {
+      response = await fetchImpl(GITHUB_GRAPHQL_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `bearer ${token}`,
+          "Content-Type": "application/json",
+          "User-Agent": "pr-reviews-analysis",
+        },
+        body,
+        signal,
+      });
+      text = await response.text();
+    } catch (error: unknown) {
+      const message = signal.aborted
+        ? `GitHub request timed out after ${deadlineMs / 1000} s`
+        : `GitHub request failed: ${describeError(error)}`;
+      return { kind: "retry", error: new Error(message) };
+    }
+    return classifyResponse(response.status, response.headers, text, now(), acceptPartial);
+  }
+
+  // Up to GRAPHQL_MAX_ATTEMPTS attempts on transient failures. A 401 refreshes the token
+  // and tries once more without using up an attempt; a second 401 means the login is bad.
+  async function request<T>(
+    query: string,
+    variables: GraphqlVariables,
+    run: GitHubRun | undefined,
+    acceptPartial: boolean,
+  ): Promise<GraphqlResponse<T>> {
+    const body = buildBody(query, variables);
+    let token = await tokenProvider.get();
+    let tokenRefreshed = false;
+    let failures = 0;
+
+    while (true) {
+      const outcome = await attempt<T>(body, token, run, acceptPartial);
+      switch (outcome.kind) {
+        case "ok":
+          return outcome.response;
+        case "fail":
+          throw outcome.error;
+        case "unauthorized":
+          if (tokenRefreshed) throw new Error(TOKEN_REJECTED_MESSAGE);
+          log.warn("GitHub rejected the token; reading it again from gh");
+          tokenRefreshed = true;
+          token = await tokenProvider.refresh();
+          break;
+        case "retry": {
+          failures++;
+          log.warn(
+            `GraphQL request failed (attempt ${failures}/${GRAPHQL_MAX_ATTEMPTS}): ${outcome.error.message}`,
+          );
+          if (failures >= GRAPHQL_MAX_ATTEMPTS) throw outcome.error;
+          if (outcome.waitMs === undefined) {
+            const backoffMs = 200 * 2 ** (failures - 1);
+            log.warn(`Retrying GraphQL request in ${backoffMs}ms`);
+            await sleep(backoffMs);
+          } else {
+            log.warn(`Waiting ${Math.ceil(outcome.waitMs / 1000)} s for the GitHub rate limit`);
+            await sleep(outcome.waitMs);
+          }
+          break;
+        }
+        default: {
+          const _exhaustive: never = outcome;
+          throw new Error(`Unexpected outcome ${String(_exhaustive)}`);
+        }
+      }
+    }
+  }
+
+  return {
+    async query<T>(query: string, variables: GraphqlVariables = {}, run?: GitHubRun) {
+      const response = await request<T>(query, variables, run, false);
+      return response.data;
+    },
+    queryPartial: <T>(query: string, variables: GraphqlVariables, run?: GitHubRun) =>
+      request<T>(query, variables, run, true),
+  };
+}
+
+const github = createGitHubClient();
 
 function buildSearchQuery(repo: string, label?: string, since?: string, until?: string): string {
   let query = `repo:${repo} type:pr`;
@@ -487,7 +640,7 @@ export async function fetchRepositorySuggestions(
 
   try {
     if (trimmed) {
-      const data = await ghGraphqlWithRetry<RepositorySearchResponse>(REPOSITORY_SEARCH_QUERY, {
+      const data = await github.query<RepositorySearchResponse>(REPOSITORY_SEARCH_QUERY, {
         searchQuery: `${trimmed} in:name fork:true`,
         first: 12,
       });
@@ -498,7 +651,7 @@ export async function fetchRepositorySuggestions(
       return uniqueSuggestions([...seedSuggestions, ...githubSuggestions], 12);
     }
 
-    const data = await ghGraphqlWithRetry<ViewerRepositoriesResponse>(VIEWER_REPOSITORIES_QUERY, {
+    const data = await github.query<ViewerRepositoriesResponse>(VIEWER_REPOSITORIES_QUERY, {
       first: 12,
     });
     const githubSuggestions = data.viewer.repositories.nodes
@@ -535,7 +688,7 @@ export async function fetchLabelSuggestions(
     }
 
     try {
-      const data = await ghGraphqlWithRetry<LabelsResponse>(LABELS_QUERY, {
+      const data = await github.query<LabelsResponse>(LABELS_QUERY, {
         owner: parsed.owner,
         name: parsed.name,
         first: 20,
@@ -576,7 +729,7 @@ export async function fetchUserSuggestions(
   }
 
   try {
-    const data = await ghGraphqlWithRetry<UserSearchResponse>(USER_SEARCH_QUERY, {
+    const data = await github.query<UserSearchResponse>(USER_SEARCH_QUERY, {
       searchQuery: `${trimmed} in:login in:name type:user`,
       first: 12,
     });
@@ -593,7 +746,7 @@ export async function fetchUserSuggestions(
 }
 
 // One page of a PR search, after `after` (null for the first page). listPullRequests passes
-// the gh call; tests pass a fake.
+// the GitHub call; tests pass a fake.
 export type SearchPullRequestPage = (
   searchQuery: string,
   after: string | null,
@@ -777,7 +930,7 @@ async function fetchPullRequestReviews(
     };
     if (cursor !== null) variables.after = cursor;
 
-    const data = await ghGraphqlWithRetry<ReviewsResponse>(PR_REVIEWS_QUERY, variables, run);
+    const data = await github.query<ReviewsResponse>(PR_REVIEWS_QUERY, variables, run);
     const pullRequest = data.repository?.pullRequest;
     if (!pullRequest) {
       throw new Error(`Pull request ${repo}#${number} was not found while fetching reviews.`);
@@ -803,12 +956,10 @@ async function fetchPullRequestBatch(
   run: GitHubRun,
 ): Promise<BatchEntry[]> {
   const { owner, name } = parseRepo(repo);
-  const response = await withGraphqlRetry(() =>
-    ghGraphqlPartial<NonNullable<PullRequestBatchResponse["data"]>>(
-      buildPullRequestBatchQuery(numbers),
-      { owner, name },
-      run,
-    ),
+  const response = await github.queryPartial<NonNullable<PullRequestBatchResponse["data"]>>(
+    buildPullRequestBatchQuery(numbers),
+    { owner, name },
+    run,
   );
   return readPullRequestBatch({ repo, numbers, response });
 }
@@ -841,7 +992,7 @@ export async function listPullRequests(
   const searchPage: SearchPullRequestPage = (searchQuery, after) => {
     const variables: Record<string, GraphqlVariable> = { searchQuery, first: SEARCH_PAGE_SIZE };
     if (after) variables.after = after;
-    return ghGraphqlWithRetry<ListingResponse>(PR_LISTING_QUERY, variables, run);
+    return github.query<ListingResponse>(PR_LISTING_QUERY, variables, run);
   };
 
   for (const [repoIndex, repo] of repos.entries()) {

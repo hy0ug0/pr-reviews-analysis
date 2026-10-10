@@ -43,8 +43,10 @@ export type BatchEntry =
 // Returns one entry per requested number, in the same order.
 export type FetchPullRequestBatch = (numbers: number[]) => Promise<BatchEntry[]>;
 
+// `type` is GitHub's error code, such as NOT_FOUND or RATE_LIMITED.
 export interface GraphqlError {
   message: string;
+  type?: string;
   path?: Array<string | number>;
 }
 
