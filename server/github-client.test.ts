@@ -1,17 +1,17 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { consola, type LogObject } from "consola";
-import type { GitHubClientOptions } from "./github.ts";
+import type { GitHubClientOptions } from "./github-client.ts";
 import { createGitHubRun, type GitHubRun } from "./github-run.ts";
 import type { TokenProvider } from "./github-token.ts";
 
-// The client's logger copies the reporter list when github.ts creates it, so the capture
+// The client's logger copies the reporter list when github-client.ts creates it, so the capture
 // is installed first. consola logs only warnings under test by default.
 const logs: string[] = [];
 consola.level = 3;
 consola.options.reporters.splice(0, consola.options.reporters.length, {
   log: (entry: LogObject) => logs.push(entry.args.map(String).join(" ")),
 });
-const { createGitHubClient } = await import("./github.ts");
+const { createGitHubClient } = await import("./github-client.ts");
 
 beforeEach(() => {
   logs.length = 0;

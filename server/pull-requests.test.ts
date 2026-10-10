@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { fetchPullRequestDetails, listPullRequests, PullRequestListing } from "./github.ts";
+import type { listPullRequests, PullRequestListing } from "./github-listing.ts";
+import type { fetchPullRequestDetails } from "./github-pull-request-details.ts";
 import type { GitHubRun } from "./github-run.ts";
 import type { AnalysisProgress } from "../shared/types.ts";
 import type { FetchedPullRequest, PullRequestRef } from "./pull-request-details.ts";
@@ -74,8 +75,10 @@ const detailsMock = mock(
     );
   },
 );
-await mock.module("./github.ts", () => ({
+await mock.module("./github-listing.ts", () => ({
   listPullRequests: listMock,
+}));
+await mock.module("./github-pull-request-details.ts", () => ({
   fetchPullRequestDetails: detailsMock,
 }));
 

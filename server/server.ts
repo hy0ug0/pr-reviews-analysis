@@ -6,7 +6,7 @@ import {
   fetchLabelSuggestions,
   fetchRepositorySuggestions,
   fetchUserSuggestions,
-} from "./github.ts";
+} from "./github-suggestions.ts";
 import { analyze } from "./analysis/analyzer.ts";
 import { config } from "./config.ts";
 import { githubToken } from "./github-token.ts";

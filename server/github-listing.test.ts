@@ -4,7 +4,7 @@ import {
   type ListingResponse,
   type RepoListingProgress,
   type SearchPullRequestPage,
-} from "./github.ts";
+} from "./github-listing.ts";
 
 const REPO = "acme/widgets";
 const RANGE = { since: "2026-01-01", until: "2026-01-04" };
