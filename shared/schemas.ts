@@ -147,6 +147,52 @@ export const firstResponseSummarySchema = z.object({
   ),
 });
 
+const durationBucketsSchema = z.array(
+  z.object({
+    label: z.string(),
+    minMs: z.number(),
+    maxMs: z.number().nullable(),
+    count: z.number(),
+  }),
+);
+
+export const reviewCycleSummarySchema = z.object({
+  timeToMerge: z.object({
+    mergedPRs: z.number(),
+    openPRs: z.number(),
+    closedUnmergedPRs: z.number(),
+    p50Ms: z.number().nullable(),
+    p90Ms: z.number().nullable(),
+    histogram: durationBucketsSchema,
+  }),
+  timeToApproval: z.object({
+    approvedPRs: z.number(),
+    approvedAtFirstReviewPRs: z.number(),
+    notApprovedPRs: z.number(),
+    unreviewedPRs: z.number(),
+    draftPRs: z.number(),
+    undeterminedPRs: z.number(),
+    p50Ms: z.number().nullable(),
+    p90Ms: z.number().nullable(),
+    histogram: durationBucketsSchema,
+  }),
+  reviewRounds: z.object({
+    reviewedMergedPRs: z.number(),
+    mergedWithoutReviewPRs: z.number(),
+    undeterminedPRs: z.number(),
+    p50: z.number().nullable(),
+    p90: z.number().nullable(),
+    distribution: z.array(
+      z.object({
+        label: z.string(),
+        rounds: z.number(),
+        orMore: z.boolean(),
+        count: z.number(),
+      }),
+    ),
+  }),
+});
+
 export const dataSourceSchema = z.object({
   listing: z.enum(["cache", "github"]),
   listedAt: z.string(),
@@ -170,6 +216,7 @@ export const analysisResultSchema = z.object({
   avgReviewsPerPR: z.number(),
   reviewerStats: z.array(reviewerStatsSchema),
   firstResponse: firstResponseSummarySchema,
+  reviewCycle: reviewCycleSummarySchema,
   timeRange: z.object({ since: z.string(), until: z.string() }),
   dataSource: dataSourceSchema.optional(),
 });
