@@ -23,11 +23,11 @@ interface AnalyzeFormProps {
 }
 
 const baseInputClass =
-  "w-full px-3 py-2 border rounded-lg shadow-sm bg-white dark:bg-slate-800 text-gray-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm";
+  "w-full px-3 py-2 border rounded-lg shadow-sm bg-white dark:bg-slate-800 text-gray-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm disabled:cursor-not-allowed";
 const inputClass = `${baseInputClass} border-gray-300 dark:border-slate-700`;
 const inputErrorClass = `${baseInputClass} border-red-400 dark:border-red-600`;
 const checkboxLabelClass =
-  "inline-flex items-start gap-2 text-sm text-gray-700 dark:text-slate-300 cursor-pointer select-none";
+  "inline-flex items-start gap-2 text-sm text-gray-700 dark:text-slate-300 cursor-pointer select-none group-disabled:cursor-not-allowed";
 const checkboxClass =
   "mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800";
 // Darker than the field hints above: at 12px, gray-400 and slate-500 miss 4.5:1 contrast.
@@ -306,193 +306,202 @@ export function AnalyzeForm({ onSubmit, loading, defaults }: AnalyzeFormProps) {
   return (
     <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-gray-200 dark:border-slate-800 p-6 mb-8">
       <form onSubmit={handleSubmit} noValidate>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div>
-            <label
-              htmlFor="repo"
-              className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1"
-            >
-              Repository
-            </label>
-            <AutocompleteInput
-              id="repo"
-              value={form.repo}
-              onChange={(value) => update("repo", value)}
-              placeholder="owner/repo"
-              className={errors.repo ? inputErrorClass : inputClass}
-              kind="repos"
-              multi
-            />
-            <FieldError message={errors.repo} />
-            {!errors.repo && (
-              <p className="text-xs text-gray-400 dark:text-slate-500 mt-1">
-                Comma-separated for multiple repos
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label
-              htmlFor="label"
-              className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1"
-            >
-              Label{" "}
-              <span className="text-gray-400 dark:text-slate-500 font-normal">(optional)</span>
-            </label>
-            <AutocompleteInput
-              id="label"
-              value={form.label}
-              onChange={(value) => update("label", value)}
-              placeholder='e.g. "bug"'
-              className={errors.label ? inputErrorClass : inputClass}
-              kind="labels"
-              repo={form.repo}
-            />
-            <FieldError message={errors.label} />
-          </div>
-
-          <div>
-            <label
-              htmlFor="timeRange"
-              className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1"
-            >
-              Time Range
-            </label>
-            <select
-              id="timeRange"
-              value={form.timeRange}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (isTimeRangePreset(v)) update("timeRange", v);
-              }}
-              className={errors.timeRange ? inputErrorClass : inputClass}
-            >
-              <option value="week">Last Week</option>
-              <option value="month">Last Month</option>
-              <option value="quarter">Last Quarter</option>
-              <option value="year">Last Year</option>
-              <option value="all">All Time</option>
-              <option value="custom">Custom Range</option>
-            </select>
-            <FieldError message={errors.timeRange} />
-          </div>
-
-          <div>
-            <label
-              htmlFor="team"
-              className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1"
-            >
-              Team Members{" "}
-              <span className="text-gray-400 dark:text-slate-500 font-normal">(optional)</span>
-            </label>
-            <AutocompleteInput
-              id="team"
-              value={form.team}
-              onChange={(value) => update("team", value)}
-              placeholder="user1, user2, ..."
-              className={errors.team ? inputErrorClass : inputClass}
-              kind="users"
-              repo={form.repo}
-              multi
-            />
-            <FieldError message={errors.team} />
-            {!errors.team && (
-              <p className="text-xs text-gray-400 dark:text-slate-500 mt-1">
-                Filter reviewers to these GitHub handles
-              </p>
-            )}
-          </div>
-        </div>
-
-        {form.timeRange === "custom" && (
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {/* Locked while an analysis runs, and left in place so it keeps showing the query
+            behind the run. Collapsing it would flash on cached runs, which end before the
+            progress panel appears. min-w-0 lets the grid shrink below the fieldset's default
+            min-content width. */}
+        <fieldset
+          disabled={loading}
+          className="group min-w-0 transition-opacity duration-200 disabled:opacity-60"
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
               <label
-                htmlFor="since"
+                htmlFor="repo"
                 className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1"
               >
-                From
+                Repository
               </label>
-              <input
-                type="date"
-                id="since"
-                value={form.since}
-                onChange={(e) => update("since", e.target.value)}
-                className={errors.since ? inputErrorClass : inputClass}
+              <AutocompleteInput
+                id="repo"
+                value={form.repo}
+                onChange={(value) => update("repo", value)}
+                placeholder="owner/repo"
+                className={errors.repo ? inputErrorClass : inputClass}
+                kind="repos"
+                multi
               />
-              <FieldError message={errors.since} />
+              <FieldError message={errors.repo} />
+              {!errors.repo && (
+                <p className="text-xs text-gray-400 dark:text-slate-500 mt-1">
+                  Comma-separated for multiple repos
+                </p>
+              )}
             </div>
+
             <div>
               <label
-                htmlFor="until"
+                htmlFor="label"
                 className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1"
               >
-                To
+                Label{" "}
+                <span className="text-gray-400 dark:text-slate-500 font-normal">(optional)</span>
               </label>
-              <input
-                type="date"
-                id="until"
-                value={form.until}
-                onChange={(e) => update("until", e.target.value)}
-                className={errors.until ? inputErrorClass : inputClass}
+              <AutocompleteInput
+                id="label"
+                value={form.label}
+                onChange={(value) => update("label", value)}
+                placeholder='e.g. "bug"'
+                className={errors.label ? inputErrorClass : inputClass}
+                kind="labels"
+                repo={form.repo}
               />
-              <FieldError message={errors.until} />
+              <FieldError message={errors.label} />
+            </div>
+
+            <div>
+              <label
+                htmlFor="timeRange"
+                className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1"
+              >
+                Time Range
+              </label>
+              <select
+                id="timeRange"
+                value={form.timeRange}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (isTimeRangePreset(v)) update("timeRange", v);
+                }}
+                className={errors.timeRange ? inputErrorClass : inputClass}
+              >
+                <option value="week">Last Week</option>
+                <option value="month">Last Month</option>
+                <option value="quarter">Last Quarter</option>
+                <option value="year">Last Year</option>
+                <option value="all">All Time</option>
+                <option value="custom">Custom Range</option>
+              </select>
+              <FieldError message={errors.timeRange} />
+            </div>
+
+            <div>
+              <label
+                htmlFor="team"
+                className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1"
+              >
+                Team Members{" "}
+                <span className="text-gray-400 dark:text-slate-500 font-normal">(optional)</span>
+              </label>
+              <AutocompleteInput
+                id="team"
+                value={form.team}
+                onChange={(value) => update("team", value)}
+                placeholder="user1, user2, ..."
+                className={errors.team ? inputErrorClass : inputClass}
+                kind="users"
+                repo={form.repo}
+                multi
+              />
+              <FieldError message={errors.team} />
+              {!errors.team && (
+                <p className="text-xs text-gray-400 dark:text-slate-500 mt-1">
+                  Filter reviewers to these GitHub handles
+                </p>
+              )}
             </div>
           </div>
-        )}
 
-        <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-col gap-3 md:flex-row md:gap-8">
-            <label className={checkboxLabelClass}>
-              <input
-                type="checkbox"
-                checked={form.skipCache}
-                onChange={(e) => update("skipCache", e.target.checked)}
-                className={checkboxClass}
-              />
-              <span>
-                Refresh from GitHub
-                <span className={checkboxHintClass}>
-                  Lists PRs again; only PRs updated since they were cached are refetched
+          {form.timeRange === "custom" && (
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label
+                  htmlFor="since"
+                  className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1"
+                >
+                  From
+                </label>
+                <input
+                  type="date"
+                  id="since"
+                  value={form.since}
+                  onChange={(e) => update("since", e.target.value)}
+                  className={errors.since ? inputErrorClass : inputClass}
+                />
+                <FieldError message={errors.since} />
+              </div>
+              <div>
+                <label
+                  htmlFor="until"
+                  className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-1"
+                >
+                  To
+                </label>
+                <input
+                  type="date"
+                  id="until"
+                  value={form.until}
+                  onChange={(e) => update("until", e.target.value)}
+                  className={errors.until ? inputErrorClass : inputClass}
+                />
+                <FieldError message={errors.until} />
+              </div>
+            </div>
+          )}
+
+          <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 md:flex-row md:gap-8">
+              <label className={checkboxLabelClass}>
+                <input
+                  type="checkbox"
+                  checked={form.skipCache}
+                  onChange={(e) => update("skipCache", e.target.checked)}
+                  className={checkboxClass}
+                />
+                <span>
+                  Refresh from GitHub
+                  <span className={checkboxHintClass}>
+                    Lists PRs again; only PRs updated since they were cached are refetched
+                  </span>
                 </span>
-              </span>
-            </label>
-            <label className={checkboxLabelClass}>
-              <input
-                type="checkbox"
-                checked={form.includeBots}
-                onChange={(e) => update("includeBots", e.target.checked)}
-                className={checkboxClass}
-              />
-              <span>
-                Include bots
-                <span className={checkboxHintClass}>
-                  Counts PRs and reviews by GitHub Apps, [bot] accounts and BOT_LOGINS
+              </label>
+              <label className={checkboxLabelClass}>
+                <input
+                  type="checkbox"
+                  checked={form.includeBots}
+                  onChange={(e) => update("includeBots", e.target.checked)}
+                  className={checkboxClass}
+                />
+                <span>
+                  Include bots
+                  <span className={checkboxHintClass}>
+                    Counts PRs and reviews by GitHub Apps, [bot] accounts and BOT_LOGINS
+                  </span>
                 </span>
-              </span>
-            </label>
-          </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="inline-flex items-center px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:focus:ring-offset-slate-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <svg
-              className="w-4 h-4 mr-2"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
+              </label>
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="inline-flex items-center px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:hover:bg-indigo-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:focus:ring-offset-slate-900 transition-colors disabled:cursor-not-allowed"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-              />
-            </svg>
-            Analyze
-          </button>
-        </div>
+              <svg
+                className="w-4 h-4 mr-2"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                />
+              </svg>
+              Analyze
+            </button>
+          </div>
+        </fieldset>
       </form>
     </div>
   );
