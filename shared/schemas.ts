@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Equals } from "./type-equals";
-import type { AnalysisProgress, AnalysisResult } from "./types";
+import type { AnalysisMetrics, AnalysisProgress, AnalysisResult } from "./types";
 
 const REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 
@@ -204,7 +204,8 @@ export const dataSourceSchema = z.object({
   skippedCache: z.boolean(),
 });
 
-export const analysisResultSchema = z.object({
+// Every field but byRepo, which repeats the metrics part for each repo.
+const analysisFieldsSchema = z.object({
   countedPRs: z.number(),
   excludedBots: z.object({ prs: z.number(), reviews: z.number() }).nullable(),
   matchingPRs: z.number(),
@@ -221,8 +222,23 @@ export const analysisResultSchema = z.object({
   dataSource: dataSourceSchema.optional(),
 });
 
-// Fails to compile when the schema and AnalysisResult differ in any field, so the
-// client never strips or rejects a field the server sends.
+// The metrics are what is left without the coverage and the data source, so a metric added
+// above is checked in each byRepo entry too.
+const analysisMetricsSchema = analysisFieldsSchema.omit({
+  matchingPRs: true,
+  analyzedPRs: true,
+  isComplete: true,
+  partialReasons: true,
+  dataSource: true,
+});
+
+export const analysisResultSchema = analysisFieldsSchema.extend({
+  byRepo: z.array(z.object({ repo: z.string(), metrics: analysisMetricsSchema })),
+});
+
+// Fail to compile when a schema and its type differ in any field, so the client never
+// strips or rejects a field the server sends.
+true satisfies Equals<z.infer<typeof analysisMetricsSchema>, AnalysisMetrics>;
 true satisfies Equals<z.infer<typeof analysisResultSchema>, AnalysisResult>;
 
 const rateLimitedUntilSchema = z.iso.datetime().optional();

@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import type { AppDefaults } from "./types";
 import { fetchDefaults } from "./api";
 import { useAnalysis } from "./useAnalysis";
+import { shownResult } from "./analysisState";
 import { AnalysisProgressPanel } from "./components/AnalysisProgressPanel";
 import { Header } from "./components/Header";
 import { AnalyzeForm } from "./components/AnalyzeForm";
@@ -13,6 +14,9 @@ import { TypesChart } from "./components/TypesChart";
 import { ReviewerTable } from "./components/ReviewerTable";
 import { FirstResponseSection } from "./components/FirstResponseSection";
 import { ReviewCycleSection } from "./components/ReviewCycleSection";
+import { RepoSwitcher } from "./components/RepoSwitcher";
+import { repoOptionId } from "./components/repoOption";
+import { RepoComparison } from "./components/RepoComparison";
 
 function subscribeToDarkMode(callback: () => void) {
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -41,9 +45,22 @@ function useReached(dueAt: number | null): boolean {
 
 export default function App() {
   const isDark = useDarkMode();
-  const { shown, loading, error, progress, startedAt, progressPanelDueAt, analyze, refresh } =
-    useAnalysis();
-  const result = shown?.result ?? null;
+  const {
+    shown,
+    loading,
+    error,
+    progress,
+    startedAt,
+    progressPanelDueAt,
+    analyze,
+    refresh,
+    selectRepo,
+  } = useAnalysis();
+  // The selected repo's metrics over the query's coverage, so every section below the
+  // switcher reads the selected repo from `result`.
+  const result = shown ? shownResult(shown) : null;
+  const byRepo = shown?.result.byRepo ?? [];
+  const hasRepoSwitcher = byRepo.length > 1;
   const showProgress = useReached(progressPanelDueAt);
   const [defaults, setDefaults] = useState<AppDefaults | undefined>(undefined);
 
@@ -129,18 +146,42 @@ export default function App() {
               </div>
             )}
 
+            {/* Above the switcher: the listing and the cache are the query's, not a repo's. */}
+            {result.dataSource && (
+              <DataSourceNote
+                dataSource={result.dataSource}
+                matchingPRs={result.matchingPRs}
+                loading={loading}
+                onRefresh={refresh}
+              />
+            )}
+
+            {hasRepoSwitcher && (
+              <RepoSwitcher
+                byRepo={byRepo}
+                totalPRs={shown.result.countedPRs}
+                selected={shown.repo}
+                onSelect={selectRepo}
+              />
+            )}
+
             <div className="space-y-3">
-              {result.dataSource && (
-                <DataSourceNote
-                  dataSource={result.dataSource}
-                  matchingPRs={result.matchingPRs}
-                  loading={loading}
-                  onRefresh={refresh}
-                />
-              )}
               <SummaryCards data={result} />
               {result.excludedBots && <ExcludedBotsNote excludedBots={result.excludedBots} />}
             </div>
+
+            {hasRepoSwitcher && shown.repo === null && (
+              <RepoComparison
+                byRepo={byRepo}
+                total={shown.result}
+                onSelect={(repo) => {
+                  selectRepo(repo);
+                  // The table goes away with the selection, so focus moves to the switcher.
+                  // It sticks to the top, so it is already in view.
+                  document.getElementById(repoOptionId(repo))?.focus({ preventScroll: true });
+                }}
+              />
+            )}
 
             <FirstResponseSection
               summary={result.firstResponse}

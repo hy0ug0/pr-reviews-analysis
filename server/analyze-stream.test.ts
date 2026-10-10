@@ -2,7 +2,7 @@ import { beforeEach, expect, mock, test } from "bun:test";
 import { createSseParser, type ServerSentEvent } from "../shared/sse.ts";
 import type { DataSource } from "../shared/types.ts";
 import type { ProgressListener } from "./load-run.ts";
-import type { LoadedPullRequests } from "./pull-requests.ts";
+import { normalizeRepos, type LoadedPullRequests } from "./pull-requests.ts";
 
 const dataSource: DataSource = {
   listing: "github",
@@ -26,7 +26,7 @@ const loadMock = mock(
   (_query: unknown, options: { onProgress?: ProgressListener; signal?: AbortSignal }) =>
     behavior(options.onProgress),
 );
-await mock.module("./pull-requests.ts", () => ({ loadPullRequests: loadMock }));
+await mock.module("./pull-requests.ts", () => ({ loadPullRequests: loadMock, normalizeRepos }));
 const { app } = await import("./server.ts");
 
 beforeEach(() => {
@@ -102,6 +102,19 @@ test("answers an invalid query with a JSON 400, before any stream starts", async
     error: "repo: Each repository must match the owner/repo format",
   });
   expect(loadMock).not.toHaveBeenCalled();
+});
+
+test("breaks the result down by every queried repo, lowercased and deduplicated", async () => {
+  const response = await app.request(
+    "/api/analyze?repo=Acme/Widgets,acme/gadgets,acme/widgets&since=2026-09-01&until=2026-09-30",
+  );
+  const result = await response.json();
+
+  expect(result.byRepo.map((entry: { repo: string }) => entry.repo)).toEqual([
+    "acme/gadgets",
+    "acme/widgets",
+  ]);
+  expect(result.byRepo[0].metrics).toMatchObject({ countedPRs: 0, totalReviews: 0 });
 });
 
 test("still answers plain JSON without the event-stream Accept header", async () => {

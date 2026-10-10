@@ -149,7 +149,17 @@ export interface AnalysisMetrics {
   timeRange: { since: string; until: string };
 }
 
+// One repo's metrics: analyze() run on that repo's PRs alone, with the same options.
+export interface RepoMetrics {
+  // Lowercased, like the repo of each PR.
+  repo: string;
+  metrics: AnalysisMetrics;
+}
+
 export interface AnalysisResult extends AnalysisCoverage, AnalysisMetrics {
+  // One entry per queried repo, those without a PR included. Coverage and data source are
+  // the query's: the listing does not split them by repo.
+  byRepo: RepoMetrics[];
   dataSource?: DataSource;
 }
 

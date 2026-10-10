@@ -8,6 +8,8 @@ export interface ShownAnalysis {
   result: AnalysisResult;
   values: AnalyzeFormValues;
   team: string[];
+  // The byRepo entry the results show; null for all repositories.
+  repo: string | null;
 }
 
 // The running analysis's latest progress. `percent` only grows within a run, so the bar
@@ -35,7 +37,8 @@ export type AnalysisEvent =
   | { kind: "started"; at: number }
   | { kind: "progressed"; progress: AnalysisProgress }
   | { kind: "succeeded"; values: AnalyzeFormValues; result: AnalysisResult }
-  | { kind: "failed"; message: string };
+  | { kind: "failed"; message: string }
+  | { kind: "repo-selected"; repo: string | null };
 
 export const initialAnalysisState: AnalysisState = {
   shown: null,
@@ -71,6 +74,31 @@ function advance(previous: RunProgress | null, progress: AnalysisProgress): RunP
   };
 }
 
+// Whether two runs asked the same question; skipCache only changes where the data comes from.
+function isSameQuery(a: AnalyzeFormValues, b: AnalyzeFormValues): boolean {
+  return JSON.stringify({ ...a, skipCache: false }) === JSON.stringify({ ...b, skipCache: false });
+}
+
+// A new query starts on all repositories. Rerunning the same one, as Refresh does, keeps the
+// repo on screen while the new result still has it.
+function repoAfterRun(
+  shown: ShownAnalysis | null,
+  values: AnalyzeFormValues,
+  result: AnalysisResult,
+): string | null {
+  if (shown === null || shown.repo === null || !isSameQuery(shown.values, values)) return null;
+  const { repo } = shown;
+  return result.byRepo.some((entry) => entry.repo === repo) ? repo : null;
+}
+
+// The result as the page shows it: with a repo selected, that repo's metrics over the
+// query's coverage and data source. Every metric field comes from the repo's entry, so a
+// section that reads the result shows the selected repo without knowing about the switcher.
+export function shownResult(shown: ShownAnalysis): AnalysisResult {
+  const entry = shown.result.byRepo.find(({ repo }) => repo === shown.repo);
+  return entry ? { ...shown.result, ...entry.metrics } : shown.result;
+}
+
 // A failed run keeps the previous analysis, values included, so Refresh never reruns a query
 // whose result is not the one on screen.
 export function analysisReducer(state: AnalysisState, event: AnalysisEvent): AnalysisState {
@@ -96,7 +124,12 @@ export function analysisReducer(state: AnalysisState, event: AnalysisEvent): Ana
       };
     case "succeeded":
       return {
-        shown: { result: event.result, values: event.values, team: parseList(event.values.team) },
+        shown: {
+          result: event.result,
+          values: event.values,
+          team: parseList(event.values.team),
+          repo: repoAfterRun(state.shown, event.values, event.result),
+        },
         loading: false,
         error: null,
         progress: null,
@@ -112,6 +145,9 @@ export function analysisReducer(state: AnalysisState, event: AnalysisEvent): Ana
         startedAt: null,
         sawGitHubWork: false,
       };
+    case "repo-selected":
+      if (state.shown === null) return state;
+      return { ...state, shown: { ...state.shown, repo: event.repo } };
     default: {
       const _exhaustive: never = event;
       return _exhaustive;

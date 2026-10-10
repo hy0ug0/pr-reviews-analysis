@@ -8,6 +8,7 @@ import {
   fetchUserSuggestions,
 } from "./github-suggestions.ts";
 import { analyze } from "./analysis/analyzer.ts";
+import { analyzeByRepo } from "./analysis/by-repo.ts";
 import { CACHE_NAMESPACES } from "./cache-namespaces.ts";
 import { sweepCacheDir } from "./cache-sweep.ts";
 import { config } from "./config.ts";
@@ -17,7 +18,7 @@ import type { AnalysisProgress, AnalysisResult, AnalyzeParams } from "../shared/
 import { describeCacheUsage } from "../shared/data-source.ts";
 import { analyzeQuerySchema, parseList } from "../shared/schemas.ts";
 import type { ProgressListener } from "./load-run.ts";
-import { loadPullRequests } from "./pull-requests.ts";
+import { loadPullRequests, normalizeRepos } from "./pull-requests.ts";
 
 const log = createLogger("server");
 
@@ -90,13 +91,16 @@ async function runAnalysis(
   const { prs, matchingPRs, analyzedPRs, isComplete, partialReasons } = fetchResult;
   log.info(`Analyzing ${analyzedPRs} PRs (total matching: ${matchingPRs})`);
   progress.onProgress?.({ phase: "analyzing", prs: analyzedPRs });
+  const options = { ...params, botLogins: config.botLogins };
 
   return {
     matchingPRs,
     analyzedPRs,
     isComplete,
     partialReasons,
-    ...analyze(prs, { ...params, botLogins: config.botLogins }),
+    ...analyze(prs, options),
+    // Normalized like the listing, so the repos match each PR's.
+    byRepo: analyzeByRepo(prs, { ...options, repos: normalizeRepos(repos) }),
     dataSource,
   };
 }
