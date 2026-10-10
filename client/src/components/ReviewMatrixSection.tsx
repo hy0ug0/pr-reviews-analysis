@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pluralize } from "../../../shared/format";
 import {
   buildMatrixView,
@@ -39,11 +39,14 @@ const SHADE_CLASSES = [
   "bg-indigo-700 text-white dark:bg-indigo-300 dark:text-indigo-950",
 ];
 
-const EMPTY_CELL_CLASS = "bg-gray-50 text-gray-400 dark:bg-slate-800/40 dark:text-slate-500";
+const EMPTY_CELL_CLASS = "bg-gray-50 text-gray-500 dark:bg-slate-800/40 dark:text-slate-400";
 // The band across the hovered cell's row and column: their headers, and the cells without a
-// shade.
+// shade. Its text is darker (lighter on dark) than elsewhere, to keep 4.5:1 on the band.
 const CROSSHAIR_HEADER_CLASS = "bg-slate-200 dark:bg-slate-700";
-const CROSSHAIR_CLASS = "bg-slate-200 text-gray-500 dark:bg-slate-700 dark:text-slate-400";
+const CROSSHAIR_CLASS = "bg-slate-200 text-gray-700 dark:bg-slate-700 dark:text-slate-200";
+// Secondary labels and values: "others", deleted accounts, folded counts. Clear 4.5:1 on the
+// surface and on the band.
+const MUTED_TEXT_CLASS = "text-gray-600 dark:text-slate-300";
 
 const METRICS: { value: MatrixMetric; label: string }[] = [
   { value: "reviews", label: "Reviews" },
@@ -113,22 +116,23 @@ function MetricToggle({
   );
 }
 
-function Legend({ max }: { max: number }) {
+// The counts each shade stands for, lightest first. Narrow enough for a 375 px screen with all
+// five shades; it wraps rather than widen the page.
+function Legend({ max, metric }: { max: number; metric: MatrixMetric }) {
   const ranges = shadeRanges(max);
   return (
-    <div className="flex items-end gap-3 text-xs text-gray-500 dark:text-slate-400">
-      <span className="pb-0.5">Fewer</span>
+    <div className="flex flex-wrap items-end gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-slate-400">
+      <span className="pb-0.5">{metric === "reviews" ? "Reviews per cell" : "PRs per cell"}</span>
       <ul className="flex gap-0.5" aria-label="Shade scale">
         {ranges.map((range) => (
-          <li key={range.level} className="flex w-12 flex-col items-center gap-1">
+          <li key={range.level} className="flex min-w-9 flex-col items-center gap-1 sm:min-w-12">
             <span className={`h-3 w-full rounded-sm ${SHADE_CLASSES[range.level]}`} />
-            <span className="tabular-nums">
+            <span className="px-0.5 whitespace-nowrap tabular-nums">
               {range.min === range.max ? range.min : `${range.min}–${range.max}`}
             </span>
           </li>
         ))}
       </ul>
-      <span className="pb-0.5">More</span>
     </div>
   );
 }
@@ -172,7 +176,7 @@ function RowHeader({ entry, isHighlighted }: { entry: MatrixEntry; isHighlighted
   }`;
   if (entry.kind === "others") {
     return (
-      <th scope="row" className={`${base} text-gray-500 dark:text-slate-400`}>
+      <th scope="row" className={`${base} ${MUTED_TEXT_CLASS}`}>
         {pluralize(entry.count, "other author")}
       </th>
     );
@@ -181,7 +185,7 @@ function RowHeader({ entry, isHighlighted }: { entry: MatrixEntry; isHighlighted
     return (
       <th
         scope="row"
-        className={`${base} italic text-gray-500 dark:text-slate-400`}
+        className={`${base} italic ${MUTED_TEXT_CLASS}`}
         title="GitHub can't resolve this author, most likely a deleted account."
       >
         Deleted account
@@ -221,7 +225,7 @@ function ColumnHeader({ entry, isHighlighted }: { entry: MatrixEntry; isHighligh
         <span
           className={`max-h-28 rotate-180 truncate text-xs [writing-mode:vertical-rl] ${
             entry.kind === "others"
-              ? "font-normal text-gray-500 dark:text-slate-400"
+              ? `font-normal ${MUTED_TEXT_CLASS}`
               : "font-medium text-gray-900 dark:text-slate-100"
           }`}
         >
@@ -245,24 +249,28 @@ interface Hover {
 // 14rem, the tooltip's width.
 const TOOLTIP_WIDTH = 224;
 
+// How far the tooltip overlaps the cell's corner, so the pointer can move straight onto it
+// without crossing another cell.
+const TOOLTIP_OVERLAP = 4;
+
 // Off a corner of the cell, so it covers neither the cell's row nor its column: below and to
 // the right, flipping left or up where the viewport runs out. On a phone too narrow for either
 // side, it sits under the cell, clamped to the screen.
 function tooltipStyle({ rect }: Hover): React.CSSProperties {
-  const gap = 8;
-  const fitsBelow = rect.bottom + gap + 80 <= window.innerHeight;
+  const margin = 8;
+  const fitsBelow = rect.bottom + 80 <= window.innerHeight;
   const vertical = fitsBelow
-    ? { top: rect.bottom + gap, translateY: "0" }
-    : { top: rect.top - gap, translateY: "-100%" };
+    ? { top: rect.bottom - TOOLTIP_OVERLAP, translateY: "0" }
+    : { top: rect.top + TOOLTIP_OVERLAP, translateY: "-100%" };
   let left: number;
   let translateX = "0";
-  if (rect.right + gap + TOOLTIP_WIDTH <= window.innerWidth) {
-    left = rect.right + gap;
-  } else if (rect.left - gap - TOOLTIP_WIDTH >= 0) {
-    left = rect.left - gap;
+  if (rect.right + TOOLTIP_WIDTH + margin <= window.innerWidth) {
+    left = rect.right - TOOLTIP_OVERLAP;
+  } else if (rect.left - TOOLTIP_WIDTH - margin >= 0) {
+    left = rect.left + TOOLTIP_OVERLAP;
     translateX = "-100%";
   } else {
-    left = Math.min(Math.max(gap, rect.left), window.innerWidth - TOOLTIP_WIDTH - gap);
+    left = Math.min(Math.max(margin, rect.left), window.innerWidth - TOOLTIP_WIDTH - margin);
   }
   return {
     left,
@@ -271,11 +279,26 @@ function tooltipStyle({ rect }: Hover): React.CSSProperties {
   };
 }
 
-function Tooltip({ hover, text, detail }: { hover: Hover; text: string; detail: string | null }) {
+function Tooltip({
+  hover,
+  text,
+  detail,
+  onPointerEnter,
+  onPointerLeave,
+}: {
+  hover: Hover;
+  text: string;
+  detail: string | null;
+  onPointerEnter: () => void;
+  onPointerLeave: () => void;
+}) {
+  // Stays while the pointer is on it, so it can be read under a screen magnifier.
   return (
     <div
       aria-hidden="true"
-      className="pointer-events-none fixed z-50 w-56 rounded-lg bg-gray-900 px-3 py-2 text-left text-xs leading-relaxed text-white shadow-lg dark:bg-slate-700"
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+      className="fixed z-50 w-56 rounded-lg bg-gray-900 px-3 py-2 text-left text-xs leading-relaxed text-white shadow-lg dark:bg-slate-700"
       style={tooltipStyle(hover)}
     >
       <p className="font-semibold">{text}</p>
@@ -301,8 +324,55 @@ function cellAt(target: EventTarget): Hover | null {
   };
 }
 
+// How long the tooltip waits after the pointer leaves the cells, so it can reach the tooltip.
+const TOOLTIP_LEAVE_DELAY_MS = 120;
+
 function MatrixTable({ view, metric }: { view: MatrixView; metric: MatrixMetric }) {
   const [hover, setHover] = useState<Hover | null>(null);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelLeave = useCallback(() => {
+    if (leaveTimer.current !== null) clearTimeout(leaveTimer.current);
+    leaveTimer.current = null;
+  }, []);
+  const hoverCell = useCallback(
+    (cell: Hover | null) => {
+      cancelLeave();
+      setHover(cell);
+    },
+    [cancelLeave],
+  );
+  const leaveSoon = useCallback(() => {
+    cancelLeave();
+    leaveTimer.current = setTimeout(() => setHover(null), TOOLTIP_LEAVE_DELAY_MS);
+  }, [cancelLeave]);
+
+  // Escape dismisses the tooltip and the highlight wherever focus is. Removing the tooltip
+  // puts a cell under a still pointer, and the browser reports that as a new hover, so hovers
+  // stay off until the pointer moves.
+  const pointer = useRef({ x: 0, y: 0 });
+  const dismissedAt = useRef<{ x: number; y: number } | null>(null);
+  const isHovering = hover !== null;
+  useEffect(() => {
+    if (!isHovering) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      dismissedAt.current = pointer.current;
+      hoverCell(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isHovering, hoverCell]);
+  useEffect(() => cancelLeave, [cancelLeave]);
+
+  const onPointer = (event: React.PointerEvent) => {
+    const dismissed = dismissedAt.current;
+    if (dismissed !== null) {
+      if (dismissed.x === event.clientX && dismissed.y === event.clientY) return;
+      dismissedAt.current = null;
+    }
+    hoverCell(cellAt(event.target));
+  };
+
   const hovered =
     hover === null
       ? null
@@ -321,7 +391,11 @@ function MatrixTable({ view, metric }: { view: MatrixView; metric: MatrixMetric 
       aria-labelledby="review-matrix-heading"
       // Focusable so keyboard users can scroll it.
       tabIndex={0}
-      onScroll={() => setHover(null)}
+      onScroll={() => hoverCell(null)}
+      // Over the cells and the tooltip alike, for the Escape dismissal.
+      onPointerMove={(event) => {
+        pointer.current = { x: event.clientX, y: event.clientY };
+      }}
       // Relative, so the screen-reader-only text in cells (absolutely positioned) is clipped
       // here instead of widening the page.
       className="relative max-h-[80vh] overflow-auto rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400"
@@ -355,8 +429,12 @@ function MatrixTable({ view, metric }: { view: MatrixView; metric: MatrixMetric 
           </tr>
         </thead>
         <tbody
-          onPointerOver={(event) => setHover(cellAt(event.target))}
-          onPointerLeave={() => setHover(null)}
+          onPointerOver={onPointer}
+          // Only to lift a dismissal; a move within the same cell changes nothing.
+          onPointerMove={(event) => {
+            if (dismissedAt.current !== null) onPointer(event);
+          }}
+          onPointerLeave={leaveSoon}
         >
           {view.rows.map((row, r) => (
             <tr key={personKey(row)}>
@@ -436,6 +514,8 @@ function MatrixTable({ view, metric }: { view: MatrixView; metric: MatrixMetric 
             metric,
           })}
           detail={isSelf(hovered.author, hovered.reviewer) ? null : countsDetail(hovered.counts)}
+          onPointerEnter={cancelLeave}
+          onPointerLeave={leaveSoon}
         />
       )}
     </div>
@@ -508,7 +588,7 @@ export function ReviewMatrixSection({ cells, teamMembers, includeBots }: ReviewM
             of people who review each other and few others is a silo.
           </p>
         </div>
-        {cells.length > 0 && <Legend max={view.max} />}
+        {cells.length > 0 && <Legend max={view.max} metric={metric} />}
         {hasTeamFilter && (
           <p className="inline-flex rounded-lg bg-indigo-50 px-3 py-1.5 text-xs text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
             Team filter on: only reviews by the{" "}
