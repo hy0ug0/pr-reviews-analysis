@@ -178,38 +178,38 @@ export const analysisResultSchema = z.object({
 // client never strips or rejects a field the server sends.
 true satisfies Equals<z.infer<typeof analysisResultSchema>, AnalysisResult>;
 
-const repoPositionShape = {
-  repo: z.string(),
-  repoIndex: z.number(),
-  repoCount: z.number(),
-};
-
 const rateLimitedUntilSchema = z.iso.datetime().optional();
 
 export const analysisProgressSchema = z.discriminatedUnion("phase", [
   z.object({ phase: z.literal("listing-cache") }),
   z.object({
     phase: z.literal("listing"),
-    ...repoPositionShape,
-    listed: z.number(),
-    matching: z.number().nullable(),
-    page: z.number(),
-    windowsDone: z.number(),
-    windowsTotal: z.number(),
+    repos: z.array(
+      z.object({
+        repo: z.string(),
+        listed: z.number(),
+        matching: z.number().nullable(),
+        page: z.number(),
+        windowsDone: z.number(),
+        windowsTotal: z.number(),
+      }),
+    ),
     rateLimitedUntil: rateLimitedUntilSchema,
   }),
   z.object({ phase: z.literal("pr-cache"), prs: z.number() }),
   z.object({
     phase: z.literal("fetching"),
-    ...repoPositionShape,
-    prsDone: z.number(),
-    prsTotal: z.number(),
-    repoPRsDone: z.number(),
-    repoPRsTotal: z.number(),
-    batchesDone: z.number(),
-    batchesTotal: z.number(),
-    reviewPRsDone: z.number(),
-    reviewPRsTotal: z.number().nullable(),
+    repos: z.array(
+      z.object({
+        repo: z.string(),
+        prsDone: z.number(),
+        prsTotal: z.number(),
+        batchesDone: z.number(),
+        batchesTotal: z.number(),
+        reviewPRsDone: z.number(),
+        reviewPRsTotal: z.number().nullable(),
+      }),
+    ),
     rateLimitedUntil: rateLimitedUntilSchema,
   }),
   z.object({ phase: z.literal("analyzing"), prs: z.number() }),

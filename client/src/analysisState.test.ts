@@ -40,17 +40,17 @@ function fetching(
 ): Extract<AnalysisProgress, { phase: "fetching" }> {
   return {
     phase: "fetching",
-    repo: "acme/a",
-    repoIndex: 0,
-    repoCount: 1,
-    prsDone,
-    prsTotal,
-    repoPRsDone: prsDone,
-    repoPRsTotal: prsTotal,
-    batchesDone: 0,
-    batchesTotal: 1,
-    reviewPRsDone: 0,
-    reviewPRsTotal: null,
+    repos: [
+      {
+        repo: "acme/a",
+        prsDone,
+        prsTotal,
+        batchesDone: 0,
+        batchesTotal: 1,
+        reviewPRsDone: 0,
+        reviewPRsTotal: null,
+      },
+    ],
   };
 }
 
@@ -100,14 +100,9 @@ describe("analysisReducer", () => {
       kind: "progressed",
       progress: {
         phase: "listing",
-        repo: "acme/a",
-        repoIndex: 0,
-        repoCount: 1,
-        listed: 0,
-        matching: null,
-        page: 0,
-        windowsDone: 0,
-        windowsTotal: 1,
+        repos: [
+          { repo: "acme/a", listed: 0, matching: null, page: 0, windowsDone: 0, windowsTotal: 1 },
+        ],
       },
     });
     const halfFetched = analysisReducer(listingStarted, {
@@ -156,14 +151,9 @@ describe("analysisReducer", () => {
 describe("progressPanelDueAt", () => {
   const listingOnGitHub: AnalysisProgress = {
     phase: "listing",
-    repo: "acme/a",
-    repoIndex: 0,
-    repoCount: 1,
-    listed: 0,
-    matching: null,
-    page: 0,
-    windowsDone: 0,
-    windowsTotal: 1,
+    repos: [
+      { repo: "acme/a", listed: 0, matching: null, page: 0, windowsDone: 0, windowsTotal: 1 },
+    ],
   };
 
   test("a full cache hit that ends at 310 ms never reaches the panel", () => {

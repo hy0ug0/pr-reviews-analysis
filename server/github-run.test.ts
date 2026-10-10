@@ -6,29 +6,25 @@ const T0 = Date.UTC(2026, 9, 10, 12, 0, 0);
 
 const listing = {
   phase: "listing",
-  repo: "honojs/hono",
-  repoIndex: 0,
-  repoCount: 1,
-  listed: 100,
-  matching: 300,
-  page: 1,
-  windowsDone: 0,
-  windowsTotal: 1,
+  repos: [
+    { repo: "honojs/hono", listed: 100, matching: 300, page: 1, windowsDone: 0, windowsTotal: 1 },
+    { repo: "oven-sh/bun", listed: 0, matching: null, page: 0, windowsDone: 0, windowsTotal: 1 },
+  ],
 } satisfies AnalysisProgress;
 
 const fetching = {
   phase: "fetching",
-  repo: "honojs/hono",
-  repoIndex: 0,
-  repoCount: 1,
-  prsDone: 25,
-  prsTotal: 300,
-  repoPRsDone: 25,
-  repoPRsTotal: 300,
-  batchesDone: 1,
-  batchesTotal: 12,
-  reviewPRsDone: 0,
-  reviewPRsTotal: null,
+  repos: [
+    {
+      repo: "honojs/hono",
+      prsDone: 25,
+      prsTotal: 300,
+      batchesDone: 1,
+      batchesTotal: 12,
+      reviewPRsDone: 0,
+      reviewPRsTotal: null,
+    },
+  ],
 } satisfies AnalysisProgress;
 
 function iso(epochMs: number): string {

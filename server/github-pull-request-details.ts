@@ -1,8 +1,12 @@
-import { github, type GraphqlVariable } from "./github-client.ts";
+import type { RepoFetchProgress } from "../shared/types.ts";
+import { github, MAX_CONCURRENT_REQUESTS, type GraphqlVariable } from "./github-client.ts";
 import type { GitHubRun } from "./github-run.ts";
+import { allInOrder } from "./lib/concurrency.ts";
 import { parseRepo } from "./lib/parse-repo.ts";
+import { createRepoProgress } from "./lib/repo-progress.ts";
 import {
   batchAlias,
+  batchFetchStart,
   fetchPullRequestsInBatches,
   pullRequestKey,
   readPullRequestBatch,
@@ -28,7 +32,11 @@ const REVIEW_PAGE_SIZE = 100;
 // microsoft/vscode took 10 to 11 s and timed out, while 25 take 3 to 7.5 s (1 point). The
 // cost per PR is the same at both sizes, 1 point per 25 PRs, so 25 only adds calls.
 const PR_BATCH_SIZE = 25;
-const FETCH_CONCURRENCY = 5;
+// Per repo, for the batches and then the review pages. The GitHub client caps the requests
+// in flight across repos; a repo may use every slot, as one repo often holds most of the PRs,
+// and the cap per repo keeps repos taking turns in the client's queue rather than one repo
+// queueing all its batches ahead of the others.
+const FETCH_CONCURRENCY = MAX_CONCURRENT_REQUESTS;
 
 const PR_REVIEWS_QUERY = `
 query($owner: String!, $name: String!, $number: Int!, $first: Int!, $after: String) {
@@ -126,8 +134,9 @@ async function fetchPullRequestBatch(
   return readPullRequestBatch({ repo, numbers, response });
 }
 
-// Fetches each PR's data and reviews in batches, one repo at a time. The map is keyed by
-// pullRequestKey and has one entry per requested PR.
+// Fetches each PR's data and reviews in batches, every repo at once: the GitHub client caps
+// the requests in flight. The map is keyed by pullRequestKey and has one entry per
+// requested PR.
 export async function fetchPullRequestDetails(
   refs: PullRequestRef[],
   run: GitHubRun,
@@ -138,47 +147,35 @@ export async function fetchPullRequestDetails(
     numbers.push(number);
     numbersByRepo.set(repo, numbers);
   }
+  const repos = Array.from(numbersByRepo, ([repo, numbers]) => ({ repo, numbers }));
+
+  const reportRepo = createRepoProgress<RepoFetchProgress>({
+    entries: repos.map(({ repo, numbers }) => ({
+      repo,
+      ...batchFetchStart({ prs: numbers.length, batchSize: PR_BATCH_SIZE }),
+    })),
+    publish: (entries) => run.report({ phase: "fetching", repos: entries }),
+  });
+  const results = await allInOrder(
+    repos.map(({ repo, numbers }) =>
+      fetchPullRequestsInBatches({
+        repo,
+        numbers,
+        batchSize: PR_BATCH_SIZE,
+        concurrency: FETCH_CONCURRENCY,
+        fetchBatch: (batch) => fetchPullRequestBatch(repo, batch, run),
+        fetchContinuation: (pr) =>
+          fetchPullRequestReviews(repo, pr.number, pr.reviews.pageInfo.endCursor, run),
+        onProgress: (progress) => reportRepo({ repo, ...progress }),
+      }),
+    ),
+  );
 
   const fetched = new Map<string, FetchedPullRequest>();
-  const repoCount = numbersByRepo.size;
-  // PRs of the repos already done, so prsDone counts across repos.
-  let prsBefore = 0;
-  for (const [repoIndex, [repo, numbers]] of Array.from(numbersByRepo).entries()) {
-    const results = await fetchPullRequestsInBatches({
-      repo,
-      numbers,
-      batchSize: PR_BATCH_SIZE,
-      concurrency: FETCH_CONCURRENCY,
-      fetchBatch: (batch) => fetchPullRequestBatch(repo, batch, run),
-      fetchContinuation: (pr) =>
-        fetchPullRequestReviews(repo, pr.number, pr.reviews.pageInfo.endCursor, run),
-      onProgress: ({
-        prsDone,
-        prsTotal,
-        batchesDone,
-        batchesTotal,
-        reviewPRsDone,
-        reviewPRsTotal,
-      }) =>
-        run.report({
-          phase: "fetching",
-          repo,
-          repoIndex,
-          repoCount,
-          prsDone: prsBefore + prsDone,
-          prsTotal: refs.length,
-          repoPRsDone: prsDone,
-          repoPRsTotal: prsTotal,
-          batchesDone,
-          batchesTotal,
-          reviewPRsDone,
-          reviewPRsTotal,
-        }),
-    });
-    prsBefore += numbers.length;
+  repos.forEach(({ repo, numbers }, repoIndex) => {
     numbers.forEach((number, index) => {
-      fetched.set(pullRequestKey({ repo, number }), results[index]);
+      fetched.set(pullRequestKey({ repo, number }), results[repoIndex][index]);
     });
-  }
+  });
   return fetched;
 }

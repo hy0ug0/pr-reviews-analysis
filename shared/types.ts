@@ -115,47 +115,45 @@ export interface DataSource {
   skippedCache: boolean;
 }
 
+// One repo's listing. `matching` is the repo's total for the range, known after its first
+// page. A range with more than 1,000 PRs is split into date windows, listed one by one:
+// windowsTotal grows when a window is split, and windowsDone reaches it once the repo is
+// listed.
+export interface RepoListingProgress {
+  repo: string;
+  listed: number;
+  matching: number | null;
+  page: number;
+  windowsDone: number;
+  windowsTotal: number;
+}
+
+// One repo's fetch. prsDone counts the PRs of finished batches, failed or not.
+// reviewPRsTotal, the PRs needing more review pages, is null until every batch is done.
+export interface RepoFetchProgress {
+  repo: string;
+  prsDone: number;
+  prsTotal: number;
+  batchesDone: number;
+  batchesTotal: number;
+  reviewPRsDone: number;
+  reviewPRsTotal: number | null;
+}
+
 // Where an analysis run is, sent to the client while it waits. Every event is a full
-// snapshot, so a client that joins late or misses one still shows the right state. Repo
-// counts say which repo is in progress when the query has several. While a GitHub request
-// waits for the rate limit, listing and fetching carry rateLimitedUntil, an ISO time.
+// snapshot, so a client that joins late or misses one still shows the right state. Repos are
+// listed and fetched side by side, so those steps carry one entry per repo, in query order;
+// the client sums them for the totals. While a GitHub request waits for the rate limit,
+// listing and fetching carry rateLimitedUntil, an ISO time.
 export type AnalysisProgress =
   // Reading the PR list from the cache, which may send the run to GitHub.
   | { phase: "listing-cache" }
-  // Searching the PR list on GitHub. `matching` is the repo's total, known after the first
-  // page. A range with more than 1,000 PRs is split into date windows, listed one by one.
-  | {
-      phase: "listing";
-      repo: string;
-      repoIndex: number;
-      repoCount: number;
-      listed: number;
-      matching: number | null;
-      page: number;
-      windowsDone: number;
-      windowsTotal: number;
-      rateLimitedUntil?: string;
-    }
+  // Searching the PR list on GitHub, one entry per repo of the query.
+  | { phase: "listing"; repos: RepoListingProgress[]; rateLimitedUntil?: string }
   // Matching the listed PRs against the PR cache.
   | { phase: "pr-cache"; prs: number }
-  // Fetching the PRs the cache could not serve. prsDone and prsTotal cover every repo; the
-  // repo counts, batches and extra review pages cover the current one. reviewPRsTotal is
-  // null until its batches end.
-  | {
-      phase: "fetching";
-      repo: string;
-      repoIndex: number;
-      repoCount: number;
-      prsDone: number;
-      prsTotal: number;
-      repoPRsDone: number;
-      repoPRsTotal: number;
-      batchesDone: number;
-      batchesTotal: number;
-      reviewPRsDone: number;
-      reviewPRsTotal: number | null;
-      rateLimitedUntil?: string;
-    }
+  // Fetching the PRs the cache could not serve, one entry per repo with PRs to fetch.
+  | { phase: "fetching"; repos: RepoFetchProgress[]; rateLimitedUntil?: string }
   // Computing the metrics, the last step.
   | { phase: "analyzing"; prs: number };
 
