@@ -15,6 +15,7 @@ export type {
   AppDefaults,
   DataSource,
   ExcludedBots,
+  ReviewMatrixCell,
   TimeRangePreset,
 } from "../../shared/types";
 

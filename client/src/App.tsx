@@ -17,6 +17,7 @@ import { ReviewCycleSection } from "./components/ReviewCycleSection";
 import { RepoSwitcher } from "./components/RepoSwitcher";
 import { repoOptionId } from "./components/repoOption";
 import { RepoComparison } from "./components/RepoComparison";
+import { ReviewMatrixSection } from "./components/ReviewMatrixSection";
 
 function subscribeToDarkMode(callback: () => void) {
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -210,6 +211,12 @@ export default function App() {
                 <TypesChart stats={result.reviewerStats} isDark={isDark} />
               </div>
             </div>
+
+            <ReviewMatrixSection
+              cells={result.reviewMatrix}
+              teamMembers={shown.team}
+              includeBots={result.excludedBots === null}
+            />
 
             <ReviewerTable stats={result.reviewerStats} />
           </div>

@@ -315,6 +315,7 @@ describe("output shape", () => {
         timeToApproval: expect.objectContaining({ approvedPRs: 0, p50Ms: null }),
         reviewRounds: expect.objectContaining({ reviewedMergedPRs: 0, p50: null }),
       },
+      reviewMatrix: [],
       excludedBots: { prs: 0, reviews: 0 },
       timeRange: { since: "", until: "" },
     });

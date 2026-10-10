@@ -133,6 +133,15 @@ export interface ExcludedBots {
   reviews: number;
 }
 
+// How much one reviewer reviewed one author's PRs: counted reviews, and the distinct PRs
+// they were on. author is null for PRs whose author GitHub can't resolve (deleted accounts).
+export interface ReviewMatrixCell {
+  author: string | null;
+  reviewer: string;
+  reviews: number;
+  prs: number;
+}
+
 // What analyze() computes from the loaded PRs.
 export interface AnalysisMetrics {
   // The PRs every metric counts: the analyzed PRs, minus those bots opened when bots are
@@ -146,6 +155,8 @@ export interface AnalysisMetrics {
   reviewerStats: ReviewerStats[];
   firstResponse: FirstResponseSummary;
   reviewCycle: ReviewCycleSummary;
+  // Only pairs with at least one review, busiest first.
+  reviewMatrix: ReviewMatrixCell[];
   timeRange: { since: string; until: string };
 }
 
