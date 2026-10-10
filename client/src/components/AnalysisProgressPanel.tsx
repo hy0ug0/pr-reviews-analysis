@@ -93,7 +93,7 @@ export function AnalysisProgressPanel({ progress, startedAt }: AnalysisProgressP
   return (
     <section
       aria-label="Analysis progress"
-      className="mx-auto mb-8 max-w-3xl rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:p-6 dark:border-slate-800 dark:bg-slate-900"
+      className="mb-8 rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:p-6 dark:border-slate-800 dark:bg-slate-900"
     >
       <div className="flex items-baseline justify-between gap-4">
         <h2 className="text-sm font-semibold text-gray-900 dark:text-slate-100">{view.label}</h2>
