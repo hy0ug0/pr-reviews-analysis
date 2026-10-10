@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { formatFetchTime } from "../../../shared/format";
-import { ANALYSIS_STEPS, progressSentence, type ProgressView } from "../../../shared/progress";
+import {
+  ANALYSIS_STEPS,
+  progressSentence,
+  rateLimitNotice,
+  type ProgressView,
+} from "../../../shared/progress";
 import type { RunProgress } from "../analysisState";
 
 interface AnalysisProgressPanelProps {
@@ -10,7 +15,14 @@ interface AnalysisProgressPanelProps {
 
 // Before the server's first snapshot: the run has started, nothing is known yet.
 const STARTING: RunProgress = {
-  view: { step: 0, fraction: null, floor: 0, label: "Starting the analysis", details: [] },
+  view: {
+    step: 0,
+    fraction: null,
+    floor: 0,
+    label: "Starting the analysis",
+    details: [],
+    rateLimitedUntil: null,
+  },
   percent: 0,
   indeterminate: true,
 };
@@ -30,14 +42,19 @@ function useNow(intervalMs: number): number {
   return now;
 }
 
-// The text for the polite live region: a new step is announced right away, counts within a
-// step only every ANNOUNCE_INTERVAL_MS, so the region does not chatter on every batch.
+// The text for the polite live region: a new step, or a rate-limit wait starting or ending,
+// is announced right away; counts within a step only every ANNOUNCE_INTERVAL_MS, so the
+// region does not chatter on every batch.
 function useAnnouncement(view: ProgressView, now: number): string {
   const sentence = progressSentence(view);
-  const [announced, setAnnounced] = useState({ sentence, step: view.step, at: now });
-  const due = view.step !== announced.step || now - announced.at >= ANNOUNCE_INTERVAL_MS;
+  const waiting = view.rateLimitedUntil !== null;
+  const [announced, setAnnounced] = useState({ sentence, step: view.step, waiting, at: now });
+  const due =
+    view.step !== announced.step ||
+    waiting !== announced.waiting ||
+    now - announced.at >= ANNOUNCE_INTERVAL_MS;
   if (due && sentence !== announced.sentence) {
-    setAnnounced({ sentence, step: view.step, at: now });
+    setAnnounced({ sentence, step: view.step, waiting, at: now });
   }
   return announced.sentence;
 }
@@ -114,6 +131,13 @@ export function AnalysisProgressPanel({ progress, startedAt }: AnalysisProgressP
           </ul>
         )}
       </div>
+
+      {/* The countdown ticks with the elapsed timer; the live region names the wait once. */}
+      {view.rateLimitedUntil !== null && (
+        <p className="mt-1 text-sm text-amber-700 tabular-nums dark:text-amber-400">
+          {rateLimitNotice(view.rateLimitedUntil, now)}
+        </p>
+      )}
 
       <div className="mt-4 flex items-center gap-3">
         <div

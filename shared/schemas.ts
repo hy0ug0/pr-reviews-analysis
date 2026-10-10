@@ -184,6 +184,8 @@ const repoPositionShape = {
   repoCount: z.number(),
 };
 
+const rateLimitedUntilSchema = z.iso.datetime().optional();
+
 export const analysisProgressSchema = z.discriminatedUnion("phase", [
   z.object({ phase: z.literal("listing-cache") }),
   z.object({
@@ -194,6 +196,7 @@ export const analysisProgressSchema = z.discriminatedUnion("phase", [
     page: z.number(),
     windowsDone: z.number(),
     windowsTotal: z.number(),
+    rateLimitedUntil: rateLimitedUntilSchema,
   }),
   z.object({ phase: z.literal("pr-cache"), prs: z.number() }),
   z.object({
@@ -207,6 +210,7 @@ export const analysisProgressSchema = z.discriminatedUnion("phase", [
     batchesTotal: z.number(),
     reviewPRsDone: z.number(),
     reviewPRsTotal: z.number().nullable(),
+    rateLimitedUntil: rateLimitedUntilSchema,
   }),
   z.object({ phase: z.literal("analyzing"), prs: z.number() }),
 ]);

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { consola, type LogObject } from "consola";
 import type { GitHubClientOptions } from "./github.ts";
-import { createGitHubRun } from "./github-run.ts";
+import { createGitHubRun, type GitHubRun } from "./github-run.ts";
 import type { TokenProvider } from "./github-token.ts";
 
 // The client's logger copies the reporter list when github.ts creates it, so the capture
@@ -592,6 +592,76 @@ describe("runs", () => {
     expect(b).toEqual({ status: "fulfilled", value: { repo: "b" } });
     expect(runA.requests).toBe(3);
     expect(runB.requests).toBe(1);
+  });
+});
+
+describe("rate-limit waits in the run", () => {
+  // A run that notes when each wait starts and ends, against the sleeps and requests so far.
+  function recordingRun({ calls, waits }: { calls: Call[]; waits: number[] }) {
+    const events: string[] = [];
+    const run: GitHubRun = {
+      requests: 0,
+      report: () => {},
+      rateLimited: (untilMs) => {
+        events.push(`wait until +${untilMs - NOW} ms, after ${waits.length} sleeps`);
+        return () => events.push(`end after ${waits.length} sleeps, ${calls.length} requests`);
+      },
+    };
+    return { run, events };
+  }
+
+  const tooMany = () => json({}, { status: 429, headers: { "retry-after": "7" } });
+
+  test("signals the wait with its end before sleeping and ends it before the retry", async () => {
+    const github = fakeGitHub(sequence(tooMany, ok));
+    const { run, events } = recordingRun(github);
+
+    expect(await github.client.query<Data>(QUERY, {}, run)).toEqual(DATA);
+    expect(events).toEqual([
+      "wait until +7000 ms, after 0 sleeps",
+      "end after 1 sleeps, 1 requests",
+    ]);
+    expect(github.calls).toHaveLength(2);
+  });
+
+  test("ends the wait when the retry then fails", async () => {
+    const github = fakeGitHub(
+      sequence(tooMany, () => json({ message: "Not Found" }, { status: 404 })),
+    );
+    const { run, events } = recordingRun(github);
+
+    expect(await rejection(github.client.query<Data>(QUERY, {}, run))).toBe(
+      "GitHub responded with HTTP 404: Not Found",
+    );
+    expect(events).toEqual([
+      "wait until +7000 ms, after 0 sleeps",
+      "end after 1 sleeps, 1 requests",
+    ]);
+  });
+
+  test("ends the wait when the sleep throws", async () => {
+    const { run, events } = recordingRun({ calls: [], waits: [] });
+    const client = createGitHubClient({
+      fetch: () => Promise.resolve(tooMany()),
+      tokenProvider: { get: () => Promise.resolve(TOKEN), refresh: () => Promise.resolve(TOKEN) },
+      sleep: () => Promise.reject(new Error("interrupted")),
+      now: () => NOW,
+    });
+
+    expect(await rejection(client.query<Data>(QUERY, {}, run))).toBe("interrupted");
+    expect(events).toEqual([
+      "wait until +7000 ms, after 0 sleeps",
+      "end after 0 sleeps, 0 requests",
+    ]);
+  });
+
+  test("ordinary backoff is not a rate-limit wait", async () => {
+    const github = fakeGitHub(sequence(() => new Response("", { status: 502 }), ok));
+    const { run, events } = recordingRun(github);
+
+    expect(await github.client.query<Data>(QUERY, {}, run)).toEqual(DATA);
+    expect(github.waits).toEqual([200]);
+    expect(events).toEqual([]);
   });
 });
 

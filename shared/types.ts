@@ -117,7 +117,8 @@ export interface DataSource {
 
 // Where an analysis run is, sent to the client while it waits. Every event is a full
 // snapshot, so a client that joins late or misses one still shows the right state. Repo
-// counts say which repo is in progress when the query has several.
+// counts say which repo is in progress when the query has several. While a GitHub request
+// waits for the rate limit, listing and fetching carry rateLimitedUntil, an ISO time.
 export type AnalysisProgress =
   // Reading the PR list from the cache, which may send the run to GitHub.
   | { phase: "listing-cache" }
@@ -133,6 +134,7 @@ export type AnalysisProgress =
       page: number;
       windowsDone: number;
       windowsTotal: number;
+      rateLimitedUntil?: string;
     }
   // Matching the listed PRs against the PR cache.
   | { phase: "pr-cache"; prs: number }
@@ -152,6 +154,7 @@ export type AnalysisProgress =
       batchesTotal: number;
       reviewPRsDone: number;
       reviewPRsTotal: number | null;
+      rateLimitedUntil?: string;
     }
   // Computing the metrics, the last step.
   | { phase: "analyzing"; prs: number };

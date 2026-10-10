@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { describeProgress, progressSentence } from "./progress.ts";
+import { describeProgress, progressSentence, rateLimitNotice } from "./progress.ts";
 import type { AnalysisProgress } from "./types.ts";
 
 function plain(details: string[]): string[] {
@@ -149,5 +149,45 @@ describe("describeProgress", () => {
 
   test("keeps each number with its unit", () => {
     expect(describeProgress({ phase: "pr-cache", prs: 592 }).details).toEqual(["592 PRs"]);
+  });
+});
+
+describe("rate-limit waits", () => {
+  const until = "2026-10-10T12:00:30.000Z";
+  const untilMs = Date.parse(until);
+
+  test("listing and fetching carry the wait's end, and the bar is unchanged", () => {
+    expect(describeProgress({ ...listing, rateLimitedUntil: until }).rateLimitedUntil).toBe(
+      untilMs,
+    );
+    const waiting = describeProgress({ ...fetching, rateLimitedUntil: until });
+    expect(waiting).toEqual({ ...describeProgress(fetching), rateLimitedUntil: untilMs });
+  });
+
+  test("no wait is null", () => {
+    expect(describeProgress(fetching).rateLimitedUntil).toBeNull();
+    expect(describeProgress({ phase: "analyzing", prs: 3 }).rateLimitedUntil).toBeNull();
+  });
+
+  test("the sentence names the wait without a countdown", () => {
+    expect(progressSentence(describeProgress({ ...fetching, rateLimitedUntil: until }))).toBe(
+      "Fetching PR details: vitejs/vite, 150 of 412 PRs (6 of 17 batches). Waiting for GitHub rate limit",
+    );
+  });
+
+  test("the notice counts down in whole seconds and stops at zero", () => {
+    expect(plain([rateLimitNotice(untilMs, untilMs - 37_000)])).toEqual([
+      "Waiting for GitHub rate limit, resuming in 37 s",
+    ]);
+    expect(plain([rateLimitNotice(untilMs, untilMs - 36_200)])).toEqual([
+      "Waiting for GitHub rate limit, resuming in 37 s",
+    ]);
+    expect(plain([rateLimitNotice(untilMs, untilMs - 400)])).toEqual([
+      "Waiting for GitHub rate limit, resuming in 1 s",
+    ]);
+    expect(rateLimitNotice(untilMs, untilMs)).toBe("Waiting for GitHub rate limit, resuming…");
+    expect(rateLimitNotice(untilMs, untilMs + 5000)).toBe(
+      "Waiting for GitHub rate limit, resuming…",
+    );
   });
 });
