@@ -166,6 +166,14 @@ test("cuts a part again when its days hold more PRs than the even spread assumed
   expect(listing.prs).toHaveLength(1300);
   expect(listing.matchingPRs).toBe(1300);
   expect(listing.isComplete).toBe(true);
+  // The second part is replaced by its 2 days: 3 windows in all, 1 of them done.
+  expect(progress).toContainEqual({
+    listed: 200,
+    matching: 1300,
+    page: 0,
+    windowsDone: 1,
+    windowsTotal: 3,
+  });
   expect(progress.at(-1)).toEqual({
     listed: 1300,
     matching: 1300,
@@ -173,6 +181,31 @@ test("cuts a part again when its days hold more PRs than the even spread assumed
     windowsDone: 3,
     windowsTotal: 3,
   });
+});
+
+test("cuts a window into no more parts than it has days, across a leap day", async () => {
+  // 2700 PRs would make 4 parts, but 3 days make at most 3.
+  const { search, firstPages } = searchByDay({
+    "2024-02-28": 900,
+    "2024-02-29": 900,
+    "2024-03-01": 900,
+  });
+
+  const listing = await listRepoPullRequests({
+    repo: REPO,
+    label: undefined,
+    range: { since: "2024-02-28", until: "2024-03-01" },
+    searchPage: search,
+  });
+
+  expect(firstPages).toEqual([
+    "2024-02-28..2024-03-01",
+    "2024-02-28..2024-02-28",
+    "2024-02-29..2024-02-29",
+    "2024-03-01..2024-03-01",
+  ]);
+  expect(listing.prs).toHaveLength(2700);
+  expect(listing.isComplete).toBe(true);
 });
 
 test("lists the first 1000 PRs of a single day past the limit and reports it partial", async () => {
