@@ -21,6 +21,7 @@ const STARTING: RunProgress = {
     floor: 0,
     label: "Starting the analysis",
     details: [],
+    repos: [],
     rateLimitedUntil: null,
   },
   percent: 0,

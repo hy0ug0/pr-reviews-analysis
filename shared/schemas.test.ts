@@ -137,28 +137,32 @@ describe("analyzeFormSchema", () => {
 describe("analysisProgressSchema", () => {
   const fetching = {
     phase: "fetching",
-    repo: "honojs/hono",
-    repoIndex: 0,
-    repoCount: 1,
-    prsDone: 25,
-    prsTotal: 300,
-    repoPRsDone: 25,
-    repoPRsTotal: 300,
-    batchesDone: 1,
-    batchesTotal: 12,
-    reviewPRsDone: 0,
-    reviewPRsTotal: null,
+    repos: [
+      {
+        repo: "honojs/hono",
+        prsDone: 25,
+        prsTotal: 300,
+        batchesDone: 1,
+        batchesTotal: 12,
+        reviewPRsDone: 0,
+        reviewPRsTotal: null,
+      },
+      {
+        repo: "oven-sh/bun",
+        prsDone: 50,
+        prsTotal: 50,
+        batchesDone: 2,
+        batchesTotal: 2,
+        reviewPRsDone: 1,
+        reviewPRsTotal: 3,
+      },
+    ],
   } satisfies AnalysisProgress;
   const listing = {
     phase: "listing",
-    repo: "honojs/hono",
-    repoIndex: 0,
-    repoCount: 1,
-    listed: 0,
-    matching: null,
-    page: 0,
-    windowsDone: 0,
-    windowsTotal: 1,
+    repos: [
+      { repo: "honojs/hono", listed: 0, matching: null, page: 0, windowsDone: 0, windowsTotal: 1 },
+    ],
   } satisfies AnalysisProgress;
   const until = "2026-10-10T12:00:30.000Z";
 
@@ -172,6 +176,19 @@ describe("analysisProgressSchema", () => {
       rateLimitedUntil: until,
     });
     expect(analysisProgressSchema.parse(fetching)).toEqual(fetching);
+  });
+
+  test("keeps every repo entry, in order", () => {
+    expect(analysisProgressSchema.parse(fetching)).toEqual(fetching);
+    expect(analysisProgressSchema.parse(listing)).toEqual(listing);
+  });
+
+  test("rejects a snapshot in the old one-repo shape", () => {
+    const { repos: _repos, ...withoutRepos } = fetching;
+    expect(
+      analysisProgressSchema.safeParse({ ...withoutRepos, repo: "honojs/hono", repoIndex: 0 })
+        .success,
+    ).toBe(false);
   });
 
   test("rejects a wait's end that is not an ISO time", () => {

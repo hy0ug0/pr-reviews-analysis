@@ -50,17 +50,17 @@ const detailsMock = mock(
       await fakeGitHubCall(run, ref.repo);
       run.report({
         phase: "fetching",
-        repo: ref.repo,
-        repoIndex: 0,
-        repoCount: 1,
-        prsDone: index + 1,
-        prsTotal: refs.length,
-        repoPRsDone: index + 1,
-        repoPRsTotal: refs.length,
-        batchesDone: index + 1,
-        batchesTotal: refs.length,
-        reviewPRsDone: 0,
-        reviewPRsTotal: null,
+        repos: [
+          {
+            repo: ref.repo,
+            prsDone: index + 1,
+            prsTotal: refs.length,
+            batchesDone: index + 1,
+            batchesTotal: refs.length,
+            reviewPRsDone: 0,
+            reviewPRsTotal: null,
+          },
+        ],
       });
     }
     return new Map(
@@ -709,7 +709,7 @@ describe("loadPullRequests progress", () => {
   function phases(progress: AnalysisProgress[]): string[] {
     return progress.map((snapshot) =>
       snapshot.phase === "fetching"
-        ? `fetching ${snapshot.prsDone}/${snapshot.prsTotal}`
+        ? `fetching ${snapshot.repos[0].prsDone}/${snapshot.repos[0].prsTotal}`
         : snapshot.phase,
     );
   }
@@ -735,14 +735,7 @@ describe("loadPullRequests progress", () => {
     listMock.mockImplementationOnce(async (listQuery, run) => {
       run.report({
         phase: "listing",
-        repo: REPO,
-        repoIndex: 0,
-        repoCount: 1,
-        listed: 0,
-        matching: 1,
-        page: 1,
-        windowsDone: 0,
-        windowsTotal: 1,
+        repos: [{ repo: REPO, listed: 0, matching: 1, page: 1, windowsDone: 0, windowsTotal: 1 }],
       });
       await listingGate;
       return {

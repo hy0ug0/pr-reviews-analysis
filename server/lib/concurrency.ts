@@ -68,3 +68,14 @@ export function createSemaphore(limit: number): Semaphore {
     },
   };
 }
+
+// Waits for promises already running side by side and resolves with their results in order.
+// Rejects with the first rejection in that order, once every promise before it has resolved:
+// the error a loop running them one after the other would have stopped on. The other
+// rejections are handled here, so none goes unhandled.
+export async function allInOrder<T>(promises: Array<Promise<T>>): Promise<T[]> {
+  for (const promise of promises) promise.catch(() => {});
+  const results: T[] = [];
+  for (const promise of promises) results.push(await promise);
+  return results;
+}

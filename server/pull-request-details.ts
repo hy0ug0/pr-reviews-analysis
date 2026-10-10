@@ -1,3 +1,4 @@
+import type { RepoFetchProgress } from "../shared/types.ts";
 import { mapWithConcurrency } from "./lib/concurrency.ts";
 import { createLogger } from "./logger.ts";
 import {
@@ -151,13 +152,24 @@ function chunk<T>(items: T[], size: number): T[][] {
 // How far one repo's fetch is. prsDone counts the PRs of finished batches, failed or not.
 // reviewPRsTotal is null until every batch is done and the PRs needing more review pages
 // are known.
-export interface BatchFetchProgress {
-  prsDone: number;
-  prsTotal: number;
-  batchesDone: number;
-  batchesTotal: number;
-  reviewPRsDone: number;
-  reviewPRsTotal: number | null;
+export type BatchFetchProgress = Omit<RepoFetchProgress, "repo">;
+
+// A repo's fetch before its first batch.
+export function batchFetchStart({
+  prs,
+  batchSize,
+}: {
+  prs: number;
+  batchSize: number;
+}): BatchFetchProgress {
+  return {
+    prsDone: 0,
+    prsTotal: prs,
+    batchesDone: 0,
+    batchesTotal: Math.ceil(prs / batchSize),
+    reviewPRsDone: 0,
+    reviewPRsTotal: null,
+  };
 }
 
 // Fetches the given PRs of one repo, `batchSize` per GraphQL call and `concurrency` calls at
@@ -186,14 +198,7 @@ export async function fetchPullRequestsInBatches({
     `Fetching ${numbers.length} PRs in ${repo} in ${batches.length} batches of up to ${batchSize} (concurrency=${concurrency})`,
   );
 
-  const progress: BatchFetchProgress = {
-    prsDone: 0,
-    prsTotal: numbers.length,
-    batchesDone: 0,
-    batchesTotal: batches.length,
-    reviewPRsDone: 0,
-    reviewPRsTotal: null,
-  };
+  const progress = batchFetchStart({ prs: numbers.length, batchSize });
   const report = (changes: Partial<BatchFetchProgress>) => {
     Object.assign(progress, changes);
     onProgress({ ...progress });

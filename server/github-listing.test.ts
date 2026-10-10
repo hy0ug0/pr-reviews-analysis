@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import {
   listRepoPullRequests,
   type ListingResponse,
-  type RepoListingProgress,
+  type RepoListingCounts,
   type SearchPullRequestPage,
 } from "./github-listing.ts";
 
@@ -40,8 +40,8 @@ const searchPage: SearchPullRequestPage = async (searchQuery, after) => {
   return response;
 };
 
-test("reports the range total from the first page, then each page across split windows", async () => {
-  const progress: RepoListingProgress[] = [];
+test("reports the range total from the first page, each page across split windows, then the end", async () => {
+  const progress: RepoListingCounts[] = [];
 
   const listing = await listRepoPullRequests({
     repo: REPO,
@@ -59,5 +59,7 @@ test("reports the range total from the first page, then each page across split w
     { listed: 100, matching: 1500, page: 1, windowsDone: 0, windowsTotal: 2 },
     { listed: 150, matching: 1500, page: 2, windowsDone: 0, windowsTotal: 2 },
     { listed: 200, matching: 1500, page: 1, windowsDone: 1, windowsTotal: 2 },
+    // Every window listed: windowsDone reaches windowsTotal.
+    { listed: 200, matching: 1500, page: 1, windowsDone: 2, windowsTotal: 2 },
   ]);
 });

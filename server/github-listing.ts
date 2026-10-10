@@ -1,7 +1,10 @@
 import { GITHUB_EPOCH_DATE, todayUtc } from "../shared/schemas.ts";
+import type { RepoListingProgress } from "../shared/types.ts";
 import { github, type GraphqlVariable } from "./github-client.ts";
 import type { GitHubRun } from "./github-run.ts";
+import { allInOrder } from "./lib/concurrency.ts";
 import { uniqueReasons } from "./lib/partial-reasons.ts";
+import { createRepoProgress } from "./lib/repo-progress.ts";
 import { createLogger } from "./logger.ts";
 import type { PullRequestRef } from "./pull-request-details.ts";
 import type { PageInfo } from "./pull-request-model.ts";
@@ -210,16 +213,19 @@ async function listWindowPullRequests(
 
 // How far one repo's listing is. `matching` is the whole range's count, from the first page
 // of the first window; null before that page. windowsTotal grows when a window is split.
-export interface RepoListingProgress {
-  listed: number;
-  matching: number | null;
-  page: number;
-  windowsDone: number;
-  windowsTotal: number;
-}
+export type RepoListingCounts = Omit<RepoListingProgress, "repo">;
+
+const NOT_LISTED: RepoListingCounts = {
+  listed: 0,
+  matching: null,
+  page: 0,
+  windowsDone: 0,
+  windowsTotal: 1,
+};
 
 // Lists one repo's PRs in the range, splitting windows past the 1000-result Search limit.
-// onProgress gets a snapshot before the first page and after each page.
+// onProgress gets a snapshot before the first page, after each page, and once the repo is
+// listed, with windowsDone equal to windowsTotal.
 export async function listRepoPullRequests({
   repo,
   label,
@@ -231,7 +237,7 @@ export async function listRepoPullRequests({
   label: string | undefined;
   range: DateWindow;
   searchPage: SearchPullRequestPage;
-  onProgress?: (progress: RepoListingProgress) => void;
+  onProgress?: (progress: RepoListingCounts) => void;
 }): Promise<PullRequestListing> {
   log.info(`Starting repo listing for ${repo} in range ${range.since}..${range.until}`);
   const windowsToList: DateWindow[] = [{ ...range }];
@@ -242,9 +248,10 @@ export async function listRepoPullRequests({
   let isComplete = true;
   let rangeMatching: number | null = null;
   let windowsDone = 0;
+  let lastPage = 0;
   // The window being listed counts too, so the total includes it.
   const windowsTotal = () => windowsDone + windowsToList.length + 1;
-  onProgress({ listed: 0, matching: null, page: 0, windowsDone, windowsTotal: 1 });
+  onProgress(NOT_LISTED);
 
   while (windowsToList.length > 0) {
     const window = windowsToList.pop()!;
@@ -255,6 +262,7 @@ export async function listRepoPullRequests({
       searchPage,
       ({ listed, issueCount, page }) => {
         rangeMatching ??= issueCount;
+        lastPage = page;
         onProgress({
           listed: seen.size + listed,
           matching: rangeMatching,
@@ -293,6 +301,13 @@ export async function listRepoPullRequests({
     }
     windowsDone++;
   }
+  onProgress({
+    listed: seen.size,
+    matching: rangeMatching,
+    page: lastPage,
+    windowsDone,
+    windowsTotal: windowsDone,
+  });
 
   log.info(
     `Completed repo listing for ${repo}: ${prs.length} PRs listed, matching ${matchingPRs}, complete=${isComplete}`,
@@ -300,8 +315,11 @@ export async function listRepoPullRequests({
   return { prs, matchingPRs, isComplete, partialReasons };
 }
 
-// Lists the PRs created in the range. Oversized windows are split to get past the
-// 1000-result Search limit. Repos are expected normalized (see normalizeRepos).
+// Lists the PRs created in the range, every repo at once: the GitHub client caps the
+// requests in flight. Oversized windows are split to get past the 1000-result Search limit.
+// The result keeps the order of `repos`, and a repo that fails fails the listing with the
+// error the first failing repo in that order gives. Repos are expected normalized (see
+// normalizeRepos).
 export async function listPullRequests(
   {
     repos,
@@ -320,10 +338,6 @@ export async function listPullRequests(
   log.info(
     `Starting listing across ${repos.length} repos in range ${dateRange.since}..${dateRange.until}${label ? ` [label:${label}]` : ""}`,
   );
-  const prs: ListedPullRequest[] = [];
-  const partialReasons: string[] = [];
-  let matchingPRs = 0;
-  let isComplete = true;
 
   const searchPage: SearchPullRequestPage = (searchQuery, after) => {
     const variables: Record<string, GraphqlVariable> = { searchQuery, first: SEARCH_PAGE_SIZE };
@@ -331,15 +345,27 @@ export async function listPullRequests(
     return github.query<ListingResponse>(PR_LISTING_QUERY, variables, run);
   };
 
-  for (const [repoIndex, repo] of repos.entries()) {
-    const repoListing = await listRepoPullRequests({
-      repo,
-      label,
-      range: dateRange,
-      searchPage,
-      onProgress: (progress) =>
-        run.report({ phase: "listing", repo, repoIndex, repoCount: repos.length, ...progress }),
-    });
+  const reportRepo = createRepoProgress<RepoListingProgress>({
+    entries: repos.map((repo) => ({ repo, ...NOT_LISTED })),
+    publish: (entries) => run.report({ phase: "listing", repos: entries }),
+  });
+  const repoListings = await allInOrder(
+    repos.map((repo) =>
+      listRepoPullRequests({
+        repo,
+        label,
+        range: dateRange,
+        searchPage,
+        onProgress: (counts) => reportRepo({ repo, ...counts }),
+      }),
+    ),
+  );
+
+  const prs: ListedPullRequest[] = [];
+  const partialReasons: string[] = [];
+  let matchingPRs = 0;
+  let isComplete = true;
+  for (const repoListing of repoListings) {
     prs.push(...repoListing.prs);
     matchingPRs += repoListing.matchingPRs;
     if (!repoListing.isComplete) isComplete = false;
