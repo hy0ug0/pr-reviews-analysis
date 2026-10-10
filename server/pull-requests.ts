@@ -3,11 +3,11 @@ import type { Equals } from "../shared/type-equals.ts";
 import type { DataSource } from "../shared/types.ts";
 import { buildCacheKey, readCache, shortCacheKey, writeCache, type CacheHit } from "./cache.ts";
 import {
-  fetchPullRequestDetails,
   listPullRequests,
   type ListedPullRequest,
   type PullRequestListing,
-} from "./github.ts";
+} from "./github-listing.ts";
+import { fetchPullRequestDetails } from "./github-pull-request-details.ts";
 import { createGitHubRun, type GitHubRun } from "./github-run.ts";
 import { startLoadRun, type LoadRun, type ProgressListener } from "./load-run.ts";
 import { mapWithConcurrency } from "./lib/concurrency.ts";
