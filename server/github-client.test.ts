@@ -1,7 +1,21 @@
-import { describe, expect, test } from "bun:test";
-import { createGitHubClient, type GitHubClientOptions } from "./github.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { consola, type LogObject } from "consola";
+import type { GitHubClientOptions } from "./github.ts";
 import { createGitHubRun } from "./github-run.ts";
 import type { TokenProvider } from "./github-token.ts";
+
+// The client's logger copies the reporter list when github.ts creates it, so the capture
+// is installed first. consola logs only warnings under test by default.
+const logs: string[] = [];
+consola.level = 3;
+consola.options.reporters.splice(0, consola.options.reporters.length, {
+  log: (entry: LogObject) => logs.push(entry.args.map(String).join(" ")),
+});
+const { createGitHubClient } = await import("./github.ts");
+
+beforeEach(() => {
+  logs.length = 0;
+});
 
 const TOKEN = "gho_first_token_000000000000000000000000";
 const REFRESHED_TOKEN = "gho_second_token_00000000000000000000000";
@@ -40,6 +54,26 @@ function hang({ init }: Call): Promise<Response> {
 
 function networkError(): Promise<Response> {
   return Promise.reject(new TypeError("Unable to connect"));
+}
+
+// Headers at once, then a body that never ends until the client's deadline aborts it.
+function pendingBody({ init }: Call): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      init.signal?.addEventListener("abort", () => controller.error(init.signal?.reason));
+    },
+  });
+  return new Response(stream, { status: 200 });
+}
+
+// Headers at once, then a body read that fails.
+function brokenBody(status: number): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(new Error("connection reset"));
+    },
+  });
+  return new Response(stream, { status });
 }
 
 // A GitHub whose answers the test scripts. The token provider hands out TOKEN, then
@@ -133,6 +167,18 @@ describe("deadline", () => {
     expect(waits).toEqual([200]);
   });
 
+  test("a body that never ends is bounded by the same deadline", async () => {
+    const { client, waits } = fakeGitHub(sequence(pendingBody, ok), { deadlineMs: 20 });
+    const run = createGitHubRun();
+
+    expect(await client.query<Data>(QUERY, {}, run)).toEqual(DATA);
+    expect(run.requests).toBe(2);
+    expect(waits).toEqual([200]);
+    expect(logs[0]).toBe(
+      "GraphQL request failed (attempt 1/3): GitHub request timed out after 0.02 s",
+    );
+  });
+
   test("a request that hangs every time fails with the deadline", async () => {
     const { client } = fakeGitHub(hang, { deadlineMs: 20 });
     const run = createGitHubRun();
@@ -157,6 +203,30 @@ describe("rate limits", () => {
     expect(await client.query<Data>(QUERY, {}, run)).toEqual(DATA);
     expect(waits).toEqual([7000]);
     expect(run.requests).toBe(2);
+  });
+
+  test("waits for a retry-after HTTP date within the cap", async () => {
+    const date = new Date(NOW + 30_000).toUTCString();
+    const { client, waits } = fakeGitHub(
+      sequence(() => json({}, { status: 429, headers: { "retry-after": date } }), ok),
+    );
+
+    expect(await client.query<Data>(QUERY)).toEqual(DATA);
+    expect(waits).toEqual([30_000]);
+  });
+
+  test("fails at once with the reset time for a retry-after HTTP date an hour ahead", async () => {
+    const date = new Date(NOW + 3600_000).toUTCString();
+    const { client, waits } = fakeGitHub(
+      sequence(() => json({}, { status: 429, headers: { "retry-after": date } })),
+    );
+    const run = createGitHubRun();
+
+    expect(await rejection(client.query<Data>(QUERY, {}, run))).toBe(
+      `GitHub rate limit reached, resets at ${localTime(NOW + 3600_000)}`,
+    );
+    expect(run.requests).toBe(1);
+    expect(waits).toEqual([]);
   });
 
   test("a 403 with the primary limit exhausted waits until x-ratelimit-reset", async () => {
@@ -273,6 +343,50 @@ describe("transient failures", () => {
     expect(run.requests).toBe(3);
   });
 
+  test("a 'Query timed out' GraphQL error is retried", async () => {
+    const { client } = fakeGitHub(
+      sequence(() => json({ data: null, errors: [{ message: "Query timed out" }] }), ok),
+    );
+    const run = createGitHubRun();
+
+    expect(await client.query<Data>(QUERY, {}, run)).toEqual(DATA);
+    expect(run.requests).toBe(2);
+  });
+
+  test("a validation error about a field named timeout is not retried", async () => {
+    const { client } = fakeGitHub(
+      sequence(() =>
+        json({ errors: [{ message: "Field 'timeout' doesn't exist on type 'Query'" }] }),
+      ),
+    );
+    const run = createGitHubRun();
+
+    expect(await rejection(client.query<Data>(QUERY, {}, run))).toBe(
+      "Field 'timeout' doesn't exist on type 'Query'",
+    );
+    expect(run.requests).toBe(1);
+  });
+
+  test("a timeout mixed with a typed error is not retried", async () => {
+    const { client } = fakeGitHub(
+      sequence(() =>
+        json({
+          data: null,
+          errors: [
+            { message: "Query timed out" },
+            { type: "NOT_FOUND", message: "Could not resolve to a Repository" },
+          ],
+        }),
+      ),
+    );
+    const run = createGitHubRun();
+
+    expect(await rejection(client.query<Data>(QUERY, {}, run))).toBe(
+      "Query timed out, Could not resolve to a Repository",
+    );
+    expect(run.requests).toBe(1);
+  });
+
   test("a GraphQL error reporting a timeout is retried", async () => {
     const { client } = fakeGitHub(
       sequence(
@@ -313,6 +427,26 @@ describe("401", () => {
     const { client } = fakeGitHub(
       sequence(() => json({ message: "Bad credentials" }, { status: 401 })),
     );
+    const run = createGitHubRun();
+
+    expect(await rejection(client.query<Data>(QUERY, {}, run))).toBe(
+      "GitHub rejected the token. Run: gh auth login",
+    );
+    expect(run.requests).toBe(2);
+  });
+
+  test("a 401 whose body cannot be read still refreshes the token", async () => {
+    const { client, calls, refreshes } = fakeGitHub(sequence(() => brokenBody(401), ok));
+    const run = createGitHubRun();
+
+    expect(await client.query<Data>(QUERY, {}, run)).toEqual(DATA);
+    expect(refreshes()).toBe(1);
+    expect(calls.map(authorization)).toEqual([`bearer ${TOKEN}`, `bearer ${REFRESHED_TOKEN}`]);
+    expect(run.requests).toBe(2);
+  });
+
+  test("a second 401 with an unreadable body fails with the login message", async () => {
+    const { client } = fakeGitHub(sequence(() => brokenBody(401)));
     const run = createGitHubRun();
 
     expect(await rejection(client.query<Data>(QUERY, {}, run))).toBe(
@@ -395,6 +529,19 @@ describe("runs", () => {
 });
 
 describe("secrets", () => {
+  test("a fetch error quoting the Authorization header is redacted in the error and the logs", async () => {
+    const { client } = fakeGitHub(() =>
+      Promise.reject(new TypeError(`Invalid header value: "bearer ${TOKEN}"`)),
+    );
+
+    const message = await rejection(client.query<Data>(QUERY));
+
+    expect(message).toBe('GitHub request failed: Invalid header value: "bearer ***"');
+    expect(logs.length).toBeGreaterThan(0);
+    expect(logs.join("\n")).toContain("bearer ***");
+    expect(logs.join("\n")).not.toContain(TOKEN);
+  });
+
   test("the token is sent to GitHub but never appears in an error message", async () => {
     const scenarios: Array<[string, Respond]> = [
       ["network error", networkError],

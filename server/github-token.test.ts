@@ -86,6 +86,15 @@ describe("error mapping", () => {
     );
   });
 
+  test("a token with a newline or space in it is rejected as not logged in", async () => {
+    for (const stdout of ["gho_abc\nextra", "gho abc", "gho_\u00e9"]) {
+      const { run } = fakeGh({ stdout });
+      expect(await rejection(createTokenProvider(run).get()), JSON.stringify(stdout)).toBe(
+        "GitHub CLI not logged in. Run: gh auth login",
+      );
+    }
+  });
+
   test("an empty token tells how to log in", async () => {
     const { run } = fakeGh({ stdout: "\n" });
 

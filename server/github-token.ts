@@ -14,6 +14,11 @@ export interface TokenProvider {
   refresh(): Promise<string>;
 }
 
+// A GitHub token is printable ASCII without spaces. Anything else is not a token, and a
+// control character in it would make fetch fail with the header, token included, in the
+// error message.
+const TOKEN_SHAPE = /^[\x21-\x7E]+$/;
+
 const runCommand: RunCommand = (file, args) =>
   new Promise((resolve, reject) => {
     execFile(file, args, (error, stdout) => {
@@ -36,7 +41,7 @@ async function readToken(run: RunCommand): Promise<string> {
     throw new Error(hasCode(error, "ENOENT") ? GH_NOT_FOUND_MESSAGE : GH_NOT_LOGGED_IN_MESSAGE);
   }
   const token = stdout.trim();
-  if (!token) throw new Error(GH_NOT_LOGGED_IN_MESSAGE);
+  if (!TOKEN_SHAPE.test(token)) throw new Error(GH_NOT_LOGGED_IN_MESSAGE);
   return token;
 }
 

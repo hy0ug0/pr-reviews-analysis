@@ -335,9 +335,20 @@ function isRateLimited(status: number, headers: Headers): boolean {
   );
 }
 
+// Retry-After is either a number of seconds or an HTTP date (RFC 9110).
+function retryAfterMs(value: string, nowMs: number): number | null {
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+  const date = Date.parse(trimmed);
+  return Number.isNaN(date) ? null : Math.max(0, date - nowMs);
+}
+
 function rateLimitWaitMs(headers: Headers, nowMs: number): number {
-  const retryAfter = Number(headers.get("retry-after"));
-  if (headers.has("retry-after") && Number.isFinite(retryAfter)) return retryAfter * 1000;
+  const retryAfter = headers.get("retry-after");
+  if (retryAfter !== null) {
+    const waitMs = retryAfterMs(retryAfter, nowMs);
+    if (waitMs !== null) return waitMs;
+  }
   const reset = Number(headers.get("x-ratelimit-reset"));
   if (headers.get("x-ratelimit-remaining") === "0" && Number.isFinite(reset) && reset > 0) {
     return Math.max(0, reset * 1000 - nowMs);
@@ -356,23 +367,30 @@ function rateLimitOutcome<T>(headers: Headers, nowMs: number): AttemptOutcome<T>
   return { kind: "retry", error: new Error("GitHub rate limit reached"), waitMs };
 }
 
-// GitHub reports a query it gave up on as an error in a 200 response, so the message is
-// the only way to tell it from a validation error.
+// GitHub reports a query it gave up on as an untyped error in a 200 response: "Something
+// went wrong while executing your query. This may be the result of a timeout, ..." or "Query
+// timed out". The phrase has to end the clause, so a field or argument named `timeout` in a
+// validation message ("Field 'timeout' doesn't exist") does not count.
+const TIMEOUT_REPORT = /\btimed out\b|\btimeout(?=[.,;:!]|$)/i;
+
+// Typed errors (NOT_FOUND, FORBIDDEN, ...) are never transient, except RATE_LIMITED.
 function isTransientGraphqlError(error: GraphqlError): boolean {
-  return /timeout/i.test(error.message);
+  if (error.type !== undefined) return error.type === "RATE_LIMITED";
+  return TIMEOUT_REPORT.test(error.message);
 }
 
+// Retried only when every error is transient: a mixed answer has a real failure in it.
 function graphqlErrorsOutcome<T>(
   errors: GraphqlError[],
   headers: Headers,
   nowMs: number,
 ): AttemptOutcome<T> {
+  const message = errors.map((error) => error.message).join(", ");
+  if (!errors.every(isTransientGraphqlError)) return { kind: "fail", error: new Error(message) };
   if (errors.some((error) => error.type === "RATE_LIMITED")) {
     return rateLimitOutcome(headers, nowMs);
   }
-  const message = errors.map((error) => error.message).join(", ");
-  if (errors.some(isTransientGraphqlError)) return { kind: "retry", error: new Error(message) };
-  return { kind: "fail", error: new Error(message) };
+  return { kind: "retry", error: new Error(message) };
 }
 
 // The body's `message`, as GitHub's HTTP errors carry one. Never the token.
@@ -389,14 +407,20 @@ function describeHttpError(status: number, body: string): string {
   return `GitHub responded with HTTP ${status}${detail ? `: ${detail}` : ""}`;
 }
 
-function classifyResponse<T>(
-  status: number,
-  headers: Headers,
-  body: string,
-  nowMs: number,
-  acceptPartial: boolean,
-): AttemptOutcome<T> {
-  if (status === 401) return { kind: "unauthorized" };
+// A 401 never gets here: attempt() answers it from the headers alone.
+function classifyResponse<T>({
+  status,
+  headers,
+  body,
+  nowMs,
+  acceptPartial,
+}: {
+  status: number;
+  headers: Headers;
+  body: string;
+  nowMs: number;
+  acceptPartial: boolean;
+}): AttemptOutcome<T> {
   if (isRateLimited(status, headers)) return rateLimitOutcome(headers, nowMs);
   if (TRANSIENT_HTTP_STATUSES.has(status)) {
     return { kind: "retry", error: new Error(describeHttpError(status, body)) };
@@ -423,6 +447,16 @@ function classifyResponse<T>(
     return { kind: "fail", error: new Error("GitHub API response has no data") };
   }
   return graphqlErrorsOutcome(errors, headers, nowMs);
+}
+
+// Defence in depth: a fetch error can quote the request headers, token included.
+function redactToken(message: string, token: string): string {
+  return message.split(token).join("***");
+}
+
+function redactOutcome<T>(outcome: AttemptOutcome<T>, token: string): AttemptOutcome<T> {
+  if (outcome.kind !== "retry" && outcome.kind !== "fail") return outcome;
+  return { ...outcome, error: new Error(redactToken(outcome.error.message, token)) };
 }
 
 // One POST to the GraphQL endpoint, with `fetch`. The suggestion endpoints pass no run.
@@ -457,14 +491,29 @@ export function createGitHubClient({
         body,
         signal,
       });
+      // Decided on the status alone: a 401 whose body stalls must still refresh the token
+      // rather than be retried as a transient failure.
+      if (response.status === 401) {
+        response.body?.cancel().catch(() => {});
+        return { kind: "unauthorized" };
+      }
       text = await response.text();
     } catch (error: unknown) {
       const message = signal.aborted
         ? `GitHub request timed out after ${deadlineMs / 1000} s`
         : `GitHub request failed: ${describeError(error)}`;
-      return { kind: "retry", error: new Error(message) };
+      return redactOutcome({ kind: "retry", error: new Error(message) }, token);
     }
-    return classifyResponse(response.status, response.headers, text, now(), acceptPartial);
+    return redactOutcome(
+      classifyResponse({
+        status: response.status,
+        headers: response.headers,
+        body: text,
+        nowMs: now(),
+        acceptPartial,
+      }),
+      token,
+    );
   }
 
   // Up to GRAPHQL_MAX_ATTEMPTS attempts on transient failures. A 401 refreshes the token
