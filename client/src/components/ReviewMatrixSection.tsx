@@ -27,16 +27,18 @@ const DEFAULT_LIMIT = 15;
 const cardClass =
   "bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-gray-200 dark:border-slate-800";
 
-// One indigo ramp, lightest to darkest, as Tailwind classes by shade level (1 to 5). On the
-// dark surface the ramp runs the other way, from near the surface to bright. The text flips
-// between indigo-950 and white so it clears 4.5:1 on every shade in both modes.
+// One indigo ramp from quiet to loud, as Tailwind classes by shade level (1 to 5): the low
+// steps sit close to the card, so the many small counts recede and the busy pairs stand out.
+// On the light card it runs from a faint tint to deep indigo, on the dark card from a dim
+// indigo near the surface to bright. The text flips between dark and light ink so it clears
+// 4.5:1 on every step in both modes.
 const SHADE_CLASSES = [
   "",
-  "bg-indigo-100 text-indigo-950 dark:bg-indigo-900 dark:text-indigo-50",
-  "bg-indigo-200 text-indigo-950 dark:bg-indigo-700 dark:text-white",
-  "bg-indigo-300 text-indigo-950 dark:bg-indigo-500 dark:text-white",
-  "bg-indigo-500 text-white dark:bg-indigo-400 dark:text-indigo-950",
-  "bg-indigo-700 text-white dark:bg-indigo-300 dark:text-indigo-950",
+  "bg-indigo-50 text-indigo-950 dark:bg-indigo-950/50 dark:text-indigo-100",
+  "bg-indigo-100 text-indigo-950 dark:bg-indigo-950 dark:text-indigo-100",
+  "bg-indigo-200 text-indigo-950 dark:bg-indigo-800 dark:text-indigo-50",
+  "bg-indigo-400 text-indigo-950 dark:bg-indigo-600 dark:text-white",
+  "bg-indigo-700 text-white dark:bg-indigo-400 dark:text-indigo-950",
 ];
 
 const EMPTY_CELL_CLASS = "bg-gray-50 text-gray-500 dark:bg-slate-800/40 dark:text-slate-400";
@@ -126,7 +128,10 @@ function Legend({ max, metric }: { max: number; metric: MatrixMetric }) {
       <ul className="flex gap-0.5" aria-label="Shade scale">
         {ranges.map((range) => (
           <li key={range.level} className="flex min-w-9 flex-col items-center gap-1 sm:min-w-12">
-            <span className={`h-3 w-full rounded-sm ${SHADE_CLASSES[range.level]}`} />
+            {/* The ring keeps the faintest steps visible against the card. */}
+            <span
+              className={`h-3 w-full rounded-sm ring-1 ring-black/5 ring-inset dark:ring-white/10 ${SHADE_CLASSES[range.level]}`}
+            />
             <span className="px-0.5 whitespace-nowrap tabular-nums">
               {range.min === range.max ? range.min : `${range.min}–${range.max}`}
             </span>
