@@ -251,6 +251,46 @@ describe("classifyApproval", () => {
   });
 });
 
+describe("classifyApproval edges", () => {
+  test("is undetermined when no fetched review was submitted and more exist", () => {
+    const pr = makePR({
+      reviews: [review({ by: "bob", submittedAt: null, state: "PENDING" })],
+      moreReviews: true,
+    });
+
+    expect(approval(pr)).toEqual({ kind: "undetermined" });
+    expect(rounds(pr)).toEqual({ kind: "undetermined" });
+  });
+
+  test("orders reviews by time, not by their order in the list", () => {
+    const outcome = approval(
+      makePR({
+        reviews: [
+          review({ by: "bob", submittedAt: "2026-03-03T12:00:00Z", state: "APPROVED" }),
+          review({ by: "carol", submittedAt: "2026-03-03T09:00:00Z" }),
+        ],
+      }),
+    );
+
+    expect(approvedAfter(outcome)).toBe(3 * HOUR);
+  });
+
+  test("counts reviews exactly at the ready-for-review time and at the closing", () => {
+    const outcome = approval(
+      makePR({
+        readyForReviewAt: "2026-03-04T09:00:00Z",
+        closedAt: "2026-03-05T09:00:00Z",
+        reviews: [
+          review({ by: "bob", submittedAt: "2026-03-04T09:00:00Z" }),
+          review({ by: "bob", submittedAt: "2026-03-05T09:00:00Z", state: "APPROVED" }),
+        ],
+      }),
+    );
+
+    expect(approvedAfter(outcome)).toBe(24 * HOUR);
+  });
+});
+
 describe("classifyRounds", () => {
   test("counts change requests, one per review, whoever made them", () => {
     const outcome = rounds(
@@ -458,6 +498,21 @@ describe("summarizeReviewCycle", () => {
         { label: "3+", rounds: 3, orMore: true, count: 1 },
       ],
     });
+  });
+
+  test("keeps time to merge whatever the team filter, unlike the review metrics", () => {
+    const prs = [
+      makePR({
+        reviews: [review({ by: "bob", submittedAt: "2026-03-03T09:00:00Z", state: "APPROVED" })],
+      }),
+    ];
+
+    const all = summarizeReviewCycle({ prs });
+    const team = summarizeReviewCycle({ prs, teamMembers: ["erin"] });
+
+    expect(team.timeToMerge).toEqual(all.timeToMerge);
+    expect(all.timeToApproval.approvedPRs).toBe(1);
+    expect(team.timeToApproval).toMatchObject({ approvedPRs: 0, unreviewedPRs: 1 });
   });
 
   test("reports no percentiles and empty buckets without samples", () => {

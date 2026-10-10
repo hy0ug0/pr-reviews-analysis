@@ -71,11 +71,14 @@ function cycleReviews(pr: PullRequest, rules: ParticipantRules): TimedReview[] {
 }
 
 // Whether reviews GitHub has but didn't return could still fall in the cycle: they come after
-// the last fetched one (see unfetchedAfter), so they matter while the PR was open then.
+// the last fetched one (see unfetchedAfter), so they matter while the PR was open then. With no
+// fetched review submitted, nothing bounds them.
 function mayMissReviews(pr: PullRequest): boolean {
+  if (!pr.reviews.pageInfo.hasNextPage) return false;
   const after = unfetchedAfter(pr).reviews;
+  if (after === null) return true;
   const closedAt = closedTime(pr);
-  return after !== null && (closedAt === null || after <= closedAt);
+  return closedAt === null || after <= closedAt;
 }
 
 // From the response start (creation or first ready for review, as in first response) to the

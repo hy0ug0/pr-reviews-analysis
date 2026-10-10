@@ -46,7 +46,7 @@ function Percentiles({
           <p className={labelClass}>p90</p>
           <p
             className={`mt-1 text-2xl font-semibold tabular-nums ${
-              isNoisy ? "text-gray-400 dark:text-slate-500" : "text-gray-700 dark:text-slate-300"
+              isNoisy ? "text-gray-500 dark:text-slate-400" : "text-gray-700 dark:text-slate-300"
             }`}
           >
             {p90}
@@ -271,9 +271,12 @@ function TimeToApprovalCard({
       {summary.approvedPRs === 0 ? (
         <EmptyState
           title={
-            reviewed === 0
-              ? "No PR opened in this range has been reviewed yet."
-              : "No PR opened in this range has been approved yet."
+            // An undetermined PR may have been reviewed or approved in the unfetched reviews.
+            summary.undeterminedPRs > 0
+              ? "No approval in this range could be timed."
+              : reviewed === 0
+                ? "No PR opened in this range has been reviewed yet."
+                : "No PR opened in this range has been approved yet."
           }
           hint={emptyHint(teamMembers)}
         />
@@ -336,7 +339,11 @@ function ReviewRoundsCard({
     >
       {summary.reviewedMergedPRs === 0 ? (
         <EmptyState
-          title="No PR opened in this range was merged after a review."
+          title={
+            summary.undeterminedPRs > 0
+              ? "No merged PR in this range has a known number of rounds."
+              : "No PR opened in this range was merged after a review."
+          }
           hint={emptyHint(teamMembers)}
         />
       ) : (
