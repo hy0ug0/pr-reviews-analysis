@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Equals } from "../shared/type-equals.ts";
 import type { DataSource } from "../shared/types.ts";
 import { buildCacheKey, readCache, shortCacheKey, writeCache, type CacheHit } from "./cache.ts";
+import { LISTING_NAMESPACE, PULL_REQUEST_NAMESPACE } from "./cache-namespaces.ts";
 import {
   listPullRequests,
   type ListedPullRequest,
@@ -14,20 +15,10 @@ import { mapWithConcurrency } from "./lib/concurrency.ts";
 import { uniqueReasons } from "./lib/partial-reasons.ts";
 import { createLogger } from "./logger.ts";
 import { pullRequestKey, type PullRequestRef } from "./pull-request-details.ts";
-import {
-  PULL_REQUEST_CACHE_VERSION,
-  pullRequestSchema,
-  type PullRequest,
-} from "./pull-request-model.ts";
+import { pullRequestSchema, type PullRequest } from "./pull-request-model.ts";
 
 const log = createLogger("pull-requests");
 
-// Bump whenever CachedListing changes shape, so listing entries written in the old shape are
-// never read. PR entries have their own version, PULL_REQUEST_CACHE_VERSION, so a PR shape
-// change keeps listings. Version 1 cached whole fetch results under "pull-requests-v1".
-const LISTING_CACHE_VERSION = 3;
-const LISTING_NAMESPACE = `pull-request-listing-v${LISTING_CACHE_VERSION}`;
-const PULL_REQUEST_NAMESPACE = `pull-request-v${PULL_REQUEST_CACHE_VERSION}`;
 const CACHE_IO_CONCURRENCY = 32;
 
 export const cachedListingSchema = z.object({
