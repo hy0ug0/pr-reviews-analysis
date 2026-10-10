@@ -88,10 +88,12 @@ export function analyze(loadedPRs: PullRequest[], options: AnalyzeOptions): Anal
     includeBots: options.includeBots,
     botLogins: options.botLogins,
   });
+  // Most reviews first, then by login, so the order doesn't depend on the PR order.
+  // localeCompare orders letters regardless of case, as the review matrix does.
   const reviewerStats = Array.from(reviewerMap.values(), (stats) => ({
     ...stats,
     ...responses.get(stats.login.toLowerCase()),
-  })).sort((a, b) => b.totalReviews - a.totalReviews);
+  })).sort((a, b) => b.totalReviews - a.totalReviews || a.login.localeCompare(b.login));
 
   return {
     countedPRs: prs.length,

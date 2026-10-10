@@ -16,6 +16,13 @@ const log = createLogger("fetch");
 const SEARCH_PAGE_SIZE = 100;
 const SEARCH_HARD_LIMIT = 1000;
 const MAX_SEARCH_PAGES = SEARCH_HARD_LIMIT / SEARCH_PAGE_SIZE;
+// An oversized window is cut into enough parts for about this many PRs each, assuming PRs
+// spread evenly over its days. The headroom below the limit covers uneven days: a part
+// still past the limit costs a discarded page and is cut again. On 7 ranges of
+// microsoft/vscode and nodejs/node, from a month to all time, 800 sent 0 to 11% fewer
+// listing requests than halving at every level, and the fewest of 700, 800, 900 and 1000
+// on 5 of the 7 (at most 5 more on the other 2).
+const SPLIT_TARGET_PRS = 800;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 // Lists PRs without their data: updatedAt tells which cached PRs are still current.
@@ -54,9 +61,9 @@ interface DateWindow {
   until: string;
 }
 
-// "split": the window matches more PRs than Search returns and can be halved.
+// "split": the window matches more PRs than Search returns and can be cut into parts.
 type ListWindowResult =
-  | { kind: "split"; issueCount: number; halves: [DateWindow, DateWindow] }
+  | { kind: "split"; issueCount: number; parts: DateWindow[] }
   | {
       kind: "listed";
       issueCount: number;
@@ -120,21 +127,21 @@ function normalizeDateRange(since?: string, until?: string): DateWindow {
   return { since: normalizedSince, until: normalizedUntil };
 }
 
-function splitWindow(window: DateWindow): [DateWindow, DateWindow] | null {
+// Cuts the window into consecutive whole-day parts, sized from its issueCount for about
+// SPLIT_TARGET_PRS each, so a large range is split once instead of halved level by level.
+// Null for a single day, which cannot be split.
+function splitWindow(window: DateWindow, issueCount: number): DateWindow[] | null {
   const sinceDate = parseDateOnly(window.since);
   const untilDate = parseDateOnly(window.until);
-  const totalDays = Math.floor((untilDate.getTime() - sinceDate.getTime()) / DAY_IN_MS);
+  const days = Math.floor((untilDate.getTime() - sinceDate.getTime()) / DAY_IN_MS) + 1;
 
-  if (totalDays <= 0) return null;
+  if (days <= 1) return null;
 
-  const leftDays = Math.floor(totalDays / 2);
-  const leftUntil = addDays(window.since, leftDays);
-  const rightSince = addDays(leftUntil, 1);
-
-  return [
-    { since: window.since, until: leftUntil },
-    { since: rightSince, until: window.until },
-  ];
+  const partCount = Math.min(days, Math.max(2, Math.ceil(issueCount / SPLIT_TARGET_PRS)));
+  return Array.from({ length: partCount }, (_, index) => ({
+    since: addDays(window.since, Math.floor((index * days) / partCount)),
+    until: addDays(window.since, Math.floor(((index + 1) * days) / partCount) - 1),
+  }));
 }
 
 // One page of a PR search, after `after` (null for the first page). listPullRequests passes
@@ -164,9 +171,9 @@ async function listWindowPullRequests(
   let isComplete = true;
 
   if (issueCount > SEARCH_HARD_LIMIT) {
-    // Stop after page 1: the caller lists each half instead.
-    const halves = splitWindow(window);
-    if (halves) return { kind: "split", issueCount, halves };
+    // Stop after page 1: the caller lists each part instead.
+    const parts = splitWindow(window, issueCount);
+    if (parts) return { kind: "split", issueCount, parts };
 
     isComplete = false;
     partialReasons.push(
@@ -274,11 +281,12 @@ export async function listRepoPullRequests({
     rangeMatching ??= windowResult.issueCount;
 
     if (windowResult.kind === "split") {
-      const [left, right] = windowResult.halves;
+      const { parts } = windowResult;
       log.info(
-        `Window ${window.since}..${window.until} has ${windowResult.issueCount} matches; splitting into ${left.since}..${left.until} and ${right.since}..${right.until}`,
+        `Window ${window.since}..${window.until} has ${windowResult.issueCount} matches; splitting into ${parts.length} windows`,
       );
-      windowsToList.push(right, left);
+      // Pushed last part first, so the parts are listed in date order.
+      windowsToList.push(...[...parts].reverse());
       onProgress({
         listed: seen.size,
         matching: rangeMatching,
