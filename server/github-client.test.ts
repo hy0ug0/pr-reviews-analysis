@@ -57,23 +57,27 @@ function networkError(): Promise<Response> {
 }
 
 // Headers at once, then a body that never ends until the client's deadline aborts it.
-function pendingBody({ init }: Call): Response {
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      init.signal?.addEventListener("abort", () => controller.error(init.signal?.reason));
-    },
-  });
-  return new Response(stream, { status: 200 });
+function pendingBody(init: ResponseInit = { status: 200 }): Respond {
+  return ({ init: request }) => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        request.signal?.addEventListener("abort", () => controller.error(request.signal?.reason));
+      },
+    });
+    return new Response(stream, init);
+  };
 }
 
 // Headers at once, then a body read that fails.
-function brokenBody(status: number): Response {
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.error(new Error("connection reset"));
-    },
-  });
-  return new Response(stream, { status });
+function brokenBody(init: ResponseInit): Respond {
+  return () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error("connection reset"));
+      },
+    });
+    return new Response(stream, init);
+  };
 }
 
 // A GitHub whose answers the test scripts. The token provider hands out TOKEN, then
@@ -168,7 +172,7 @@ describe("deadline", () => {
   });
 
   test("a body that never ends is bounded by the same deadline", async () => {
-    const { client, waits } = fakeGitHub(sequence(pendingBody, ok), { deadlineMs: 20 });
+    const { client, waits } = fakeGitHub(sequence(pendingBody(), ok), { deadlineMs: 20 });
     const run = createGitHubRun();
 
     expect(await client.query<Data>(QUERY, {}, run)).toEqual(DATA);
@@ -281,6 +285,69 @@ describe("rate limits", () => {
 
     expect(await client.query<Data>(QUERY)).toEqual(DATA);
     expect(waits).toEqual([60_000]);
+  });
+
+  test("a 429 with an unreadable body still waits for retry-after", async () => {
+    const { client, waits, calls } = fakeGitHub(
+      sequence(brokenBody({ status: 429, headers: { "retry-after": "7" } }), ok),
+      { deadlineMs: 20 },
+    );
+    const run = createGitHubRun();
+
+    expect(await client.query<Data>(QUERY, {}, run)).toEqual(DATA);
+    expect(waits).toEqual([7000]);
+    expect(run.requests).toBe(2);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("a 429 with a stalled body and a long retry-after fails at once with the reset time", async () => {
+    const { client, waits } = fakeGitHub(
+      pendingBody({ status: 429, headers: { "retry-after": "3600" } }),
+      { deadlineMs: 20 },
+    );
+    const run = createGitHubRun();
+
+    expect(await rejection(client.query<Data>(QUERY, {}, run))).toBe(
+      `GitHub rate limit reached, resets at ${localTime(NOW + 3600_000)}`,
+    );
+    expect(run.requests).toBe(1);
+    expect(waits).toEqual([]);
+  });
+
+  test("a rate-limited 403 with a stalled body waits until x-ratelimit-reset", async () => {
+    const reset = String(NOW / 1000 + 45);
+    const { client, waits } = fakeGitHub(
+      sequence(
+        pendingBody({
+          status: 403,
+          headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": reset },
+        }),
+        ok,
+      ),
+      { deadlineMs: 20 },
+    );
+    const run = createGitHubRun();
+
+    expect(await client.query<Data>(QUERY, {}, run)).toEqual(DATA);
+    expect(waits).toEqual([45_000]);
+    expect(run.requests).toBe(2);
+  });
+
+  test("a rate-limited 403 with an unreadable body and a far reset fails at once", async () => {
+    const reset = String(NOW / 1000 + 3600);
+    const { client, waits } = fakeGitHub(
+      brokenBody({
+        status: 403,
+        headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": reset },
+      }),
+    );
+    const run = createGitHubRun();
+
+    expect(await rejection(client.query<Data>(QUERY, {}, run))).toBe(
+      `GitHub rate limit reached, resets at ${localTime(NOW + 3600_000)}`,
+    );
+    expect(run.requests).toBe(1);
+    expect(waits).toEqual([]);
   });
 
   test("a 403 without rate-limit headers is a permission error and is not retried", async () => {
@@ -436,7 +503,7 @@ describe("401", () => {
   });
 
   test("a 401 whose body cannot be read still refreshes the token", async () => {
-    const { client, calls, refreshes } = fakeGitHub(sequence(() => brokenBody(401), ok));
+    const { client, calls, refreshes } = fakeGitHub(sequence(brokenBody({ status: 401 }), ok));
     const run = createGitHubRun();
 
     expect(await client.query<Data>(QUERY, {}, run)).toEqual(DATA);
@@ -446,7 +513,7 @@ describe("401", () => {
   });
 
   test("a second 401 with an unreadable body fails with the login message", async () => {
-    const { client } = fakeGitHub(sequence(() => brokenBody(401)));
+    const { client } = fakeGitHub(sequence(brokenBody({ status: 401 })));
     const run = createGitHubRun();
 
     expect(await rejection(client.query<Data>(QUERY, {}, run))).toBe(

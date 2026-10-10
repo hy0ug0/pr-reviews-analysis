@@ -349,6 +349,8 @@ function rateLimitWaitMs(headers: Headers, nowMs: number): number {
     const waitMs = retryAfterMs(retryAfter, nowMs);
     if (waitMs !== null) return waitMs;
   }
+  // Every response carries x-ratelimit-reset, so on its own it says nothing about a limit:
+  // a secondary limit with remaining > 0 would turn a one-minute wait into a failure.
   const reset = Number(headers.get("x-ratelimit-reset"));
   if (headers.get("x-ratelimit-remaining") === "0" && Number.isFinite(reset) && reset > 0) {
     return Math.max(0, reset * 1000 - nowMs);
@@ -407,7 +409,8 @@ function describeHttpError(status: number, body: string): string {
   return `GitHub responded with HTTP ${status}${detail ? `: ${detail}` : ""}`;
 }
 
-// A 401 never gets here: attempt() answers it from the headers alone.
+// A 401 or a header-signalled rate limit never gets here: attempt() answers those from the
+// headers alone. A RATE_LIMITED GraphQL error does, since it is in the body.
 function classifyResponse<T>({
   status,
   headers,
@@ -421,7 +424,6 @@ function classifyResponse<T>({
   nowMs: number;
   acceptPartial: boolean;
 }): AttemptOutcome<T> {
-  if (isRateLimited(status, headers)) return rateLimitOutcome(headers, nowMs);
   if (TRANSIENT_HTTP_STATUSES.has(status)) {
     return { kind: "retry", error: new Error(describeHttpError(status, body)) };
   }
@@ -491,11 +493,15 @@ export function createGitHubClient({
         body,
         signal,
       });
-      // Decided on the status alone: a 401 whose body stalls must still refresh the token
-      // rather than be retried as a transient failure.
+      // Decided on the headers alone, so a body that stalls or resets cannot turn a 401
+      // into a transient retry, or a known reset time into blind backoff.
       if (response.status === 401) {
         response.body?.cancel().catch(() => {});
         return { kind: "unauthorized" };
+      }
+      if (isRateLimited(response.status, response.headers)) {
+        response.body?.cancel().catch(() => {});
+        return redactOutcome(rateLimitOutcome(response.headers, now()), token);
       }
       text = await response.text();
     } catch (error: unknown) {
