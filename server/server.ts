@@ -2,7 +2,6 @@ import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { zValidator } from "@hono/zod-validator";
 import type { z } from "zod";
-import { execFileSync } from "node:child_process";
 import {
   fetchLabelSuggestions,
   fetchRepositorySuggestions,
@@ -10,6 +9,7 @@ import {
 } from "./github.ts";
 import { analyze } from "./analysis/analyzer.ts";
 import { config } from "./config.ts";
+import { githubToken } from "./github-token.ts";
 import { createLogger } from "./logger.ts";
 import type { AnalysisProgress, AnalysisResult, AnalyzeParams } from "../shared/types.ts";
 import { describeCacheUsage } from "../shared/data-source.ts";
@@ -188,18 +188,15 @@ app.get(
   },
 );
 
-function checkGhAuth(): void {
+// Tests import this module for `app`; only a real start reads the gh token and logs the
+// settings. Every request would fail without a token, so the server stops here instead.
+if (import.meta.main) {
   try {
-    execFileSync("gh", ["auth", "status"], { stdio: "pipe" });
-  } catch {
-    log.error("GitHub CLI not authenticated. Run: gh auth login");
+    await githubToken.get();
+  } catch (error: unknown) {
+    log.error(errorMessage(error));
     process.exit(1);
   }
-}
-
-// Tests import this module for `app`; only a real start checks gh and logs the settings.
-if (import.meta.main) {
-  checkGhAuth();
   log.info(
     `Local cache enabled at ${config.cacheDir} (listing TTL: ${config.cacheTtlHours}h, PR TTL: ${config.prCacheTtlDays}d)`,
   );

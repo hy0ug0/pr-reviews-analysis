@@ -9,12 +9,14 @@ Local tool to analyze PR review activity using GitHub data.
 ## Requirements
 
 - [Bun](https://bun.sh/) 1.4.2+
-- [GitHub CLI](https://cli.github.com/) installed and authenticated
+- [GitHub CLI](https://cli.github.com/) installed and logged in to github.com
 
 ```bash
 gh auth login
 gh auth status
 ```
+
+The server does not call `gh` for data. It reads your token once with `gh auth token` and calls the GitHub GraphQL API at `api.github.com` itself. Only public GitHub is supported, not GitHub Enterprise.
 
 ## Setup
 

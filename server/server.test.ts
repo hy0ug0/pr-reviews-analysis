@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-// A static import: if loading server.ts still ran `gh auth status` and exited on failure,
-// this file could not run at all without an authenticated gh.
+// A static import: if loading server.ts still read the gh token and exited on failure,
+// this file could not run at all without a logged-in gh.
 import { app } from "./server.ts";
 
 async function getAnalyze(query: string): Promise<{ status: number; error: unknown }> {
