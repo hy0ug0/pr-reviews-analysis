@@ -345,7 +345,7 @@ export function ReviewerTable({ stats }: ReviewerTableProps) {
               >
                 <td className="px-6 py-3 whitespace-nowrap">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-gray-400 dark:text-slate-500 w-4 text-right tabular-nums">
+                    <span className="w-4 shrink-0 text-right text-xs font-medium text-gray-400 tabular-nums dark:text-slate-500">
                       {i + 1}
                     </span>
                     <img
@@ -354,7 +354,7 @@ export function ReviewerTable({ stats }: ReviewerTableProps) {
                       width={24}
                       height={24}
                       loading="lazy"
-                      className="w-6 h-6 rounded-full bg-gray-100 dark:bg-slate-800"
+                      className="h-6 w-6 shrink-0 rounded-full bg-gray-100 dark:bg-slate-800"
                     />
                     <a
                       href={`https://github.com/${s.login}`}
