@@ -75,6 +75,8 @@ Tick **Refresh from GitHub** in the form to list the PRs again right away. Only 
 
 A PR whose reviews could not be fetched completely, or with more than 50 review request events, is shown but not cached, so the next request fetches it again.
 
+On start, the server sweeps `CACHE_DIR` in the background and deletes the files it will never read again: expired entries, entries from an earlier cache version, files from before the cache had namespaces, and temp files older than five minutes left by an interrupted write. It logs how many files and bytes it removed, as a `Cache sweep:` line. The sweep deletes only regular files whose name matches a cache pattern, in `CACHE_DIR` itself, so anything else you keep there and any subdirectory is left alone. A `CACHE_DIR` that is missing or cannot be read logs a warning and the server starts anyway.
+
 ## Run
 
 ```bash

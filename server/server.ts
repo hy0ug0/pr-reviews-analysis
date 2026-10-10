@@ -8,6 +8,8 @@ import {
   fetchUserSuggestions,
 } from "./github-suggestions.ts";
 import { analyze } from "./analysis/analyzer.ts";
+import { CACHE_NAMESPACES } from "./cache-namespaces.ts";
+import { sweepCacheDir } from "./cache-sweep.ts";
 import { config } from "./config.ts";
 import { githubToken } from "./github-token.ts";
 import { createLogger } from "./logger.ts";
@@ -199,6 +201,11 @@ if (import.meta.main) {
   }
   log.info(
     `Local cache enabled at ${config.cacheDir} (listing TTL: ${config.cacheTtlHours}h, PR TTL: ${config.prCacheTtlDays}d)`,
+  );
+  // Not awaited: the cache can hold tens of thousands of files. Nothing on disk makes the
+  // sweep reject; the catch keeps a bug in it from taking the server down.
+  sweepCacheDir({ dir: config.cacheDir, namespaces: CACHE_NAMESPACES }).catch((error: unknown) =>
+    log.error(`Cache sweep failed: ${errorMessage(error)}`),
   );
   log.info(
     config.analyzeIdleTimeoutSeconds === 0
