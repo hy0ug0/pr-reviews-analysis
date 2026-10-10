@@ -299,6 +299,17 @@ describe("aggregation", () => {
 
     expect(logins(result)).toEqual(["bob", "alice", "carol"]);
   });
+
+  test("orders reviewers tied on totalReviews by login, whatever the PR order", () => {
+    const prs = [
+      makePR({ number: 1, reviews: [makeReview({ by: "dave" }), makeReview({ by: "Carol" })] }),
+      makePR({ number: 2, reviews: [makeReview({ by: "bob" }), makeReview({ by: "erin" })] }),
+      makePR({ number: 3, reviews: [makeReview({ by: "erin" })] }),
+    ];
+
+    expect(logins(run(prs))).toEqual(["erin", "bob", "Carol", "dave"]);
+    expect(logins(run([...prs].reverse()))).toEqual(["erin", "bob", "Carol", "dave"]);
+  });
 });
 
 describe("output shape", () => {
@@ -441,7 +452,7 @@ describe("bots", () => {
   test("with bots included, keeps bot PRs and counts bot reviews", () => {
     const result = run(prs, { includeBots: true, botLogins: ["ci-user"] });
 
-    expect(logins(result)).toEqual(["carol", "bob", "copilot-pull-request-reviewer", "ci-user"]);
+    expect(logins(result)).toEqual(["carol", "bob", "ci-user", "copilot-pull-request-reviewer"]);
     expect(result.totalReviews).toBe(5);
     expect(result.firstResponse.respondedPRs).toBe(3);
     expect(result.excludedBots).toBeNull();
