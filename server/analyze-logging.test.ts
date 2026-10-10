@@ -1,7 +1,7 @@
 import { expect, mock, test } from "bun:test";
 import { consola, type LogObject } from "consola";
 import type { DataSource } from "../shared/types.ts";
-import type { LoadedPullRequests } from "./pull-requests.ts";
+import { normalizeRepos, type LoadedPullRequests } from "./pull-requests.ts";
 
 const dataSource: DataSource = {
   listing: "github",
@@ -30,7 +30,7 @@ const sharedLoad = new Promise<LoadedPullRequests>((resolve) => {
     });
 });
 const loadMock = mock(() => sharedLoad);
-await mock.module("./pull-requests.ts", () => ({ loadPullRequests: loadMock }));
+await mock.module("./pull-requests.ts", () => ({ loadPullRequests: loadMock, normalizeRepos }));
 
 // Loggers copy the level and share the reporter list when server.ts creates them, so set
 // both before importing it. consola logs only warnings under test by default.

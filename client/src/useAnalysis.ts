@@ -25,5 +25,14 @@ export function useAnalysis() {
     if (state.shown) void runner.run({ ...state.shown.values, skipCache: true });
   };
 
-  return { ...state, progressPanelDueAt: progressPanelDueAt(state), analyze, refresh };
+  // Null shows all repositories.
+  const selectRepo = (repo: string | null) => dispatch({ kind: "repo-selected", repo });
+
+  return {
+    ...state,
+    progressPanelDueAt: progressPanelDueAt(state),
+    analyze,
+    refresh,
+    selectRepo,
+  };
 }

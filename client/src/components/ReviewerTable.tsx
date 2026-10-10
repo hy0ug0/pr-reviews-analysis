@@ -1,16 +1,13 @@
 import { useState, useMemo, useCallback, useId } from "react";
 import { formatDuration, pluralize } from "../../../shared/format";
 import type { ReviewerStats } from "../types";
+import { MIN_SAMPLES_FOR_P90 } from "./sampleSize";
 
 interface ReviewerTableProps {
   stats: ReviewerStats[];
 }
 
 type SortKey = keyof ReviewerStats;
-
-// Below this many answered requests a p90 is close to the slowest single response, so it is
-// dimmed.
-const MIN_SAMPLES_FOR_P90 = 5;
 
 const RESPONSE_TOOLTIP =
   "Time from a review request, to the reviewer or one of their teams, until their next review or comment. Draft time doesn't count, and each re-request is a new round. n is the number of answered requests.";
@@ -181,7 +178,7 @@ interface TooltipState {
 
 // A focusable info button: the tooltip shows on hover and on keyboard focus, and screen
 // readers get the text as the button's description.
-function TooltipIcon({ text, label }: { text: string; label: string }) {
+export function TooltipIcon({ text, label }: { text: string; label: string }) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const descriptionId = useId();
 

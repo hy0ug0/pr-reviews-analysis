@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { readAnalysisStream } from "./analysisStream";
-import type { AnalysisProgress, AnalysisResult } from "./types";
+import type { AnalysisMetrics, AnalysisProgress, AnalysisResult } from "./types";
 
 // A body that arrives in the given chunks, split wherever the test likes.
 function body(...chunks: string[]): ReadableStream<Uint8Array> {
@@ -13,12 +13,8 @@ function body(...chunks: string[]): ReadableStream<Uint8Array> {
   });
 }
 
-const result: AnalysisResult = {
+const metrics: AnalysisMetrics = {
   countedPRs: 0,
-  matchingPRs: 0,
-  analyzedPRs: 0,
-  isComplete: true,
-  partialReasons: [],
   totalReviews: 0,
   uniqueReviewers: 0,
   avgReviewsPerPR: 0,
@@ -68,6 +64,15 @@ const result: AnalysisResult = {
   excludedBots: null,
 };
 
+const result: AnalysisResult = {
+  ...metrics,
+  matchingPRs: 0,
+  analyzedPRs: 0,
+  isComplete: true,
+  partialReasons: [],
+  byRepo: [{ repo: "acme/a", metrics }],
+};
+
 test("hands progress over and resolves with the result, across split chunks", async () => {
   const progress: AnalysisProgress[] = [];
   const stream = body(
@@ -81,6 +86,7 @@ test("hands progress over and resolves with the result, across split chunks", as
 
   expect(progress).toEqual([{ phase: "pr-cache", prs: 3 }]);
   expect(received.timeRange).toEqual(result.timeRange);
+  expect(received.byRepo).toEqual(result.byRepo);
 });
 
 test("skips a progress snapshot it cannot read", async () => {

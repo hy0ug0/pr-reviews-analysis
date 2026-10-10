@@ -6,11 +6,12 @@ import {
   initialAnalysisState,
   PROGRESS_PANEL_DELAY_MS,
   progressPanelDueAt,
+  shownResult,
   type AnalysisEvent,
   type AnalysisState,
   type StreamAnalysis,
 } from "./analysisState";
-import type { AnalysisProgress, AnalysisResult, AnalyzeFormValues } from "./types";
+import type { AnalysisMetrics, AnalysisProgress, AnalysisResult, AnalyzeFormValues } from "./types";
 
 function formValues(repo: string, team = ""): AnalyzeFormValues {
   return {
@@ -61,7 +62,7 @@ describe("analysisReducer", () => {
     const state = run(started, { kind: "succeeded", values, result: resultA });
 
     expect(state).toEqual({
-      shown: { result: resultA, values, team: ["alice", "bob"] },
+      shown: { result: resultA, values, team: ["alice", "bob"], repo: null },
       loading: false,
       error: null,
       progress: null,
@@ -145,6 +146,135 @@ describe("analysisReducer", () => {
     const idle: AnalysisState = initialAnalysisState;
 
     expect(analysisReducer(idle, { kind: "progressed", progress: fetching(1, 2) })).toBe(idle);
+  });
+});
+
+function metrics(countedPRs: number, totalReviews: number): AnalysisMetrics {
+  return {
+    countedPRs,
+    excludedBots: null,
+    totalReviews,
+    uniqueReviewers: 1,
+    avgReviewsPerPR: countedPRs > 0 ? totalReviews / countedPRs : 0,
+    reviewerStats: [],
+    firstResponse: {
+      respondedPRs: 0,
+      waitingPRs: 0,
+      closedWithoutResponsePRs: countedPRs,
+      draftPRs: 0,
+      undeterminedPRs: 0,
+      p50Ms: null,
+      p75Ms: null,
+      p90Ms: null,
+      histogram: [],
+      weekly: [],
+    },
+    reviewCycle: {
+      timeToMerge: {
+        mergedPRs: countedPRs,
+        openPRs: 0,
+        closedUnmergedPRs: 0,
+        p50Ms: null,
+        p90Ms: null,
+        histogram: [],
+      },
+      timeToApproval: {
+        approvedPRs: 0,
+        approvedAtFirstReviewPRs: 0,
+        notApprovedPRs: 0,
+        unreviewedPRs: countedPRs,
+        draftPRs: 0,
+        undeterminedPRs: 0,
+        p50Ms: null,
+        p90Ms: null,
+        histogram: [],
+      },
+      reviewRounds: {
+        reviewedMergedPRs: 0,
+        mergedWithoutReviewPRs: countedPRs,
+        undeterminedPRs: 0,
+        p50: null,
+        p90: null,
+        distribution: [],
+      },
+    },
+    timeRange: { since: "2026-09-01", until: "2026-09-30" },
+  };
+}
+
+describe("repo selection", () => {
+  const twoRepos: AnalysisResult = {
+    ...metrics(3, 6),
+    matchingPRs: 4,
+    analyzedPRs: 3,
+    isComplete: false,
+    partialReasons: ["acme/b#7 could not be fetched."],
+    byRepo: [
+      { repo: "acme/a", metrics: metrics(2, 5) },
+      { repo: "acme/b", metrics: metrics(1, 1) },
+    ],
+  };
+  const values = formValues("acme/a,acme/b");
+  const shownB = run(
+    started,
+    { kind: "succeeded", values, result: twoRepos },
+    { kind: "repo-selected", repo: "acme/b" },
+  );
+
+  test("a result starts on all repositories, which shows the result as it came", () => {
+    const state = run(started, { kind: "succeeded", values, result: twoRepos });
+
+    expect(state.shown?.repo).toBeNull();
+    expect(state.shown && shownResult(state.shown)).toBe(twoRepos);
+  });
+
+  test("a selected repo shows its own metrics over the query's coverage", () => {
+    const shown = shownResult(shownB.shown!);
+
+    expect(shown).toMatchObject({ countedPRs: 1, totalReviews: 1, avgReviewsPerPR: 1 });
+    expect(shown).toMatchObject({ matchingPRs: 4, analyzedPRs: 3, isComplete: false });
+    expect(shown.byRepo).toBe(twoRepos.byRepo);
+  });
+
+  test("selecting all repositories again shows the whole result", () => {
+    const state = analysisReducer(shownB, { kind: "repo-selected", repo: null });
+
+    expect(state.shown && shownResult(state.shown)).toBe(twoRepos);
+  });
+
+  test("a new query starts over on all repositories", () => {
+    const state = analysisReducer(analysisReducer(shownB, started), {
+      kind: "succeeded",
+      values: { ...values, timeRange: "quarter" },
+      result: twoRepos,
+    });
+
+    expect(state.shown?.repo).toBeNull();
+  });
+
+  test("rerunning the same query, as Refresh does, keeps the selected repo", () => {
+    const state = analysisReducer(analysisReducer(shownB, started), {
+      kind: "succeeded",
+      values: { ...values, skipCache: true },
+      result: twoRepos,
+    });
+
+    expect(state.shown?.repo).toBe("acme/b");
+  });
+
+  test("a failed run keeps the selected repo with the analysis it belongs to", () => {
+    const state = analysisReducer(analysisReducer(shownB, started), {
+      kind: "failed",
+      message: "rate limited",
+    });
+
+    expect(state.shown?.repo).toBe("acme/b");
+  });
+
+  test("ignores a selection when no analysis is shown", () => {
+    expect(analysisReducer(initialAnalysisState, { kind: "repo-selected", repo: "acme/a" })).toBe(
+      initialAnalysisState,
+    );
   });
 });
 

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { formatDuration, pluralize } from "../../../shared/format";
 import type { ReviewCycleSummary } from "../types";
 import { DistributionBars, type DistributionRow } from "./DistributionBars";
+import { MIN_SAMPLES_FOR_P90 } from "./sampleSize";
 
 interface ReviewCycleSectionProps {
   summary: ReviewCycleSummary;
@@ -18,10 +19,6 @@ const cardClass =
   "bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-gray-200 dark:border-slate-800";
 const labelClass = "text-xs font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wider";
 const noteClass = "text-xs text-gray-500 dark:text-slate-400";
-
-// Below this many PRs a p90 is close to the slowest single one, so it is dimmed, as in the
-// reviewer table.
-const MIN_SAMPLES_FOR_P90 = 5;
 
 function Percentiles({
   median,

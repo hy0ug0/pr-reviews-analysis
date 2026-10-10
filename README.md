@@ -48,6 +48,16 @@ By default the analysis leaves bots out. A bot is a GitHub App (such as Renovate
 
 A line under the summary cards shows how many bot PRs and bot reviews were left out. The **Total PRs** card counts the PRs the metrics use, so it leaves bot PRs out too. Tick **Include bots** in the form to count them like anyone else. The filter applies after the cache, so switching it reuses the cached data.
 
+## Several repositories
+
+With more than one repository in the query, a row of options above the summary cards picks which repository the results show. **All repositories** shows the whole query. A repository shows its own numbers in every section: summary cards, bot note, first response, review cycle, charts and reviewer table. The row stays at the top of the window while you scroll. A new query goes back to **All repositories**, and **Refresh** keeps the repository on screen.
+
+Under **All repositories**, a **By repository** table puts the repositories side by side: PRs, reviews, reviewers, reviews per PR, first response p50 and p90, and time to merge p50. A repository that the query lists but where no PR matched shows zeros, and one where bots opened every PR says so. The total row is the whole query. PRs and reviews add up to it, but reviewers may not: someone who reviews in two repositories counts once in the total. With fewer than 5 PRs that got a response, the p90 is dimmed.
+
+Each repository's numbers come from the same analysis run on that repository's PRs alone, with the same team filter and bot setting. The coverage warning and the cache line describe the whole query, so they stay above the row.
+
+The API result carries the split in `byRepo`: one entry per queried repository, lowercased, with that repository's metrics in the same shape as the top-level ones.
+
 ## Reviewer response time
 
 The **Response p50** and **p90** columns of the reviewer table measure how long a reviewer takes to respond once asked. Each sample runs from a review request to that reviewer's next review or conversation comment on the PR:
