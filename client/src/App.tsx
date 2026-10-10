@@ -12,6 +12,7 @@ import { ReviewsChart } from "./components/ReviewsChart";
 import { TypesChart } from "./components/TypesChart";
 import { ReviewerTable } from "./components/ReviewerTable";
 import { FirstResponseSection } from "./components/FirstResponseSection";
+import { ReviewCycleSection } from "./components/ReviewCycleSection";
 
 function subscribeToDarkMode(callback: () => void) {
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -146,6 +147,12 @@ export default function App() {
               teamMembers={shown.team}
               includeBots={result.excludedBots === null}
               isDark={isDark}
+            />
+
+            <ReviewCycleSection
+              summary={result.reviewCycle}
+              teamMembers={shown.team}
+              includeBots={result.excludedBots === null}
             />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

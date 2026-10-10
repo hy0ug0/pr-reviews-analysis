@@ -60,6 +60,16 @@ The **Response p50** and **p90** columns of the reviewer table measure how long 
 
 Samples come from every PR in the date range, like first response. **n** is the number of samples. With fewer than 5, the p90 is dimmed: it is close to the slowest single response. A reviewer without a counted review in the range gets no row, even if they answered requests by comment.
 
+## Time to merge, time to approval and review rounds
+
+Three cards under the first response section follow a PR from review to merge. Each shows a p50, a p90 and a distribution. With fewer than 5 PRs in a card, its p90 is dimmed: it is close to the slowest single PR. Like first response, the cards cover every PR opened in the date range, whatever the date of the review or the merge, so a PR merged after the range ends still counts. Reviews and merges also follow first response's window: a review before the PR was ready for review, or after it closed, doesn't count.
+
+- **Time to merge** runs from ready for review (creation, or the first ready-for-review event of a PR opened as a draft) to the merge. Every merged PR counts, reviewed or not. Open PRs and PRs closed without merging are listed as not counted.
+- **Time to approval** runs from a PR's first review to its first approval. The first review is any submitted review: an approval, a change request, a comment review, or a review later dismissed. A PR approved at its first review counts as 0, and the distribution shows those PRs in a row of their own. GitHub reports a dismissed review as `DISMISSED` and drops its original state, so a dismissed approval never ends the clock: only an approval that still stands does. Drafts are left out. Conversation comments are not reviews and don't start the clock.
+- **Review rounds** counts the change requests on each merged PR that got a review. Two reviewers asking for changes make two rounds. A change request later dismissed doesn't count, since its state is lost. Open and closed PRs are left out because they may get more rounds, and so are merged PRs without a review. The distribution groups PRs by 0, 1, 2 and 3 or more rounds. The p50 and p90 have one decimal.
+
+Time to approval and review rounds count the same reviews as first response: reviews by the PR author or by deleted accounts never count, reviews by bots count only with **Include bots** ticked, and with a team filter only team members' reviews count. Time to merge doesn't depend on reviews, so the team filter doesn't change it. When some of a PR's reviews couldn't be fetched and the missing ones may change the result, the PR is left out and counted as such.
+
 ## Cache
 
 The server caches GitHub data on disk in two tiers:

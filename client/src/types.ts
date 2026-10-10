@@ -7,6 +7,8 @@ export type {
   AnalysisResult,
   DurationBucket,
   FirstResponseSummary,
+  ReviewCycleSummary,
+  ReviewRoundsBucket,
   WeeklyFirstResponse,
   AppDefaults,
   DataSource,

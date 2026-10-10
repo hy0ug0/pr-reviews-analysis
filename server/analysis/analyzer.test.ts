@@ -310,6 +310,11 @@ describe("output shape", () => {
       avgReviewsPerPR: 0,
       reviewerStats: [],
       firstResponse: expect.objectContaining({ respondedPRs: 0, p50Ms: null, weekly: [] }),
+      reviewCycle: {
+        timeToMerge: expect.objectContaining({ mergedPRs: 0, p50Ms: null }),
+        timeToApproval: expect.objectContaining({ approvedPRs: 0, p50Ms: null }),
+        reviewRounds: expect.objectContaining({ reviewedMergedPRs: 0, p50: null }),
+      },
       excludedBots: { prs: 0, reviews: 0 },
       timeRange: { since: "", until: "" },
     });
@@ -373,6 +378,25 @@ describe("bots", () => {
     expect(result.totalReviews).toBe(2);
     expect(result.avgReviewsPerPR).toBe(2);
     expect(result.firstResponse.respondedPRs).toBe(1);
+  });
+
+  test("by default, drops bot PRs from the review cycle and bot reviews from approvals", () => {
+    const botApproved = makePR({
+      number: 4,
+      reviews: [makeReview({ by: "copilot-pull-request-reviewer", type: "Bot" })],
+    });
+
+    const excluded = run([...prs, botApproved]).reviewCycle;
+    expect(excluded.timeToMerge.mergedPRs).toBe(2);
+    expect(excluded.timeToApproval).toMatchObject({ approvedPRs: 1, unreviewedPRs: 1 });
+    expect(excluded.reviewRounds).toMatchObject({
+      reviewedMergedPRs: 1,
+      mergedWithoutReviewPRs: 1,
+    });
+
+    const included = run([...prs, botApproved], { includeBots: true }).reviewCycle;
+    expect(included.timeToMerge.mergedPRs).toBe(4);
+    expect(included.timeToApproval.approvedPRs).toBe(4);
   });
 
   test("countedPRs, the Total PRs card, counts the same PRs as the other metrics", () => {

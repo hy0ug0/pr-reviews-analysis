@@ -63,6 +63,61 @@ export interface FirstResponseSummary {
   weekly: WeeklyFirstResponse[];
 }
 
+// From ready for review (as in first response) to the merge, over the merged PRs. Open PRs
+// and PRs closed without merging have no duration.
+export interface TimeToMergeSummary {
+  mergedPRs: number;
+  openPRs: number;
+  closedUnmergedPRs: number;
+  // Null when no PR was merged.
+  p50Ms: number | null;
+  p90Ms: number | null;
+  histogram: DurationBucket[];
+}
+
+// From a PR's first review to its first approval that wasn't dismissed, both by participants.
+export interface TimeToApprovalSummary {
+  approvedPRs: number;
+  // Of approvedPRs, those whose first review was the approval: a duration of 0.
+  approvedAtFirstReviewPRs: number;
+  // Reviewed, but no approval that still stands.
+  notApprovedPRs: number;
+  unreviewedPRs: number;
+  draftPRs: number;
+  // More reviews than were fetched and no approval among the fetched ones.
+  undeterminedPRs: number;
+  // Null when no PR was approved.
+  p50Ms: number | null;
+  p90Ms: number | null;
+  histogram: DurationBucket[];
+}
+
+export interface ReviewRoundsBucket {
+  label: string;
+  rounds: number;
+  // Whether the bucket also holds every higher count, as the last one does ("3+").
+  orMore: boolean;
+  count: number;
+}
+
+// Change requests per merged PR that got a review.
+export interface ReviewRoundsSummary {
+  reviewedMergedPRs: number;
+  mergedWithoutReviewPRs: number;
+  // More reviews than were fetched, so some change requests may be missing.
+  undeterminedPRs: number;
+  // Rounds per PR, to one decimal; null when no merged PR got a review.
+  p50: number | null;
+  p90: number | null;
+  distribution: ReviewRoundsBucket[];
+}
+
+export interface ReviewCycleSummary {
+  timeToMerge: TimeToMergeSummary;
+  timeToApproval: TimeToApprovalSummary;
+  reviewRounds: ReviewRoundsSummary;
+}
+
 // How many of the PRs the query matches were analyzed, and why some are missing.
 export interface AnalysisCoverage {
   matchingPRs: number;
@@ -90,6 +145,7 @@ export interface AnalysisMetrics {
   avgReviewsPerPR: number;
   reviewerStats: ReviewerStats[];
   firstResponse: FirstResponseSummary;
+  reviewCycle: ReviewCycleSummary;
   timeRange: { since: string; until: string };
 }
 

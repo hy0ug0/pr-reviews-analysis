@@ -6,6 +6,7 @@ import type {
 } from "../../shared/types.ts";
 import { summarizeFirstResponse } from "./first-response.ts";
 import { NO_REVIEWER_RESPONSES, summarizeReviewerResponses } from "./reviewer-response.ts";
+import { summarizeReviewCycle } from "./review-cycle.ts";
 import {
   isExcludedBotPR,
   isParticipant,
@@ -107,6 +108,12 @@ export function analyze(loadedPRs: PullRequest[], options: AnalyzeOptions): Anal
       botLogins: options.botLogins,
       since: options.since,
       until: options.until,
+    }),
+    reviewCycle: summarizeReviewCycle({
+      prs,
+      teamMembers: options.teamMembers,
+      includeBots: options.includeBots,
+      botLogins: options.botLogins,
     }),
     timeRange: {
       since: options.since || "",
