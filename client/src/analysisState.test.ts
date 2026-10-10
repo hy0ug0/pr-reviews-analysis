@@ -34,7 +34,10 @@ function run(...events: AnalysisEvent[]) {
   return events.reduce(analysisReducer, initialAnalysisState);
 }
 
-function fetching(prsDone: number, prsTotal: number): AnalysisProgress {
+function fetching(
+  prsDone: number,
+  prsTotal: number,
+): Extract<AnalysisProgress, { phase: "fetching" }> {
   return {
     phase: "fetching",
     repo: "acme/a",
@@ -127,6 +130,20 @@ describe("analysisReducer", () => {
 
     expect(behind.progress?.percent).toBe(ahead.progress?.percent ?? -1);
     expect(behind.progress?.view.label).toBe("Checking the cache");
+  });
+
+  test("a rate-limit wait reaches the view and leaves the bar where it was", () => {
+    const before = run(started, { kind: "progressed", progress: fetching(5, 10) });
+    const until = "2026-10-10T12:00:30.000Z";
+    const waiting = analysisReducer(before, {
+      kind: "progressed",
+      progress: { ...fetching(5, 10), rateLimitedUntil: until },
+    });
+    const resumed = analysisReducer(waiting, { kind: "progressed", progress: fetching(5, 10) });
+
+    expect(waiting.progress?.view.rateLimitedUntil).toBe(Date.parse(until));
+    expect(waiting.progress?.percent).toBe(before.progress?.percent ?? -1);
+    expect(resumed.progress?.view.rateLimitedUntil).toBeNull();
   });
 
   test("ignores progress when no run is going", () => {

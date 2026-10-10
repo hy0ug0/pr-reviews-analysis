@@ -23,7 +23,12 @@ export interface ProgressView {
   label: string;
   // Repo and counts, shown after the label with "·" between them.
   details: string[];
+  // When a GitHub rate-limit wait ends, in epoch ms; null when no request is waiting.
+  rateLimitedUntil: number | null;
 }
+
+// A view before the wait is added; only describeProgress adds it.
+type PhaseView = Omit<ProgressView, "rateLimitedUntil">;
 
 function position(step: number, share: number | null): Pick<ProgressView, "fraction" | "floor"> {
   const [start, end] = STEP_SPANS[ANALYSIS_STEPS[step]];
@@ -76,7 +81,7 @@ function view(
   label: string,
   details: string[],
   floorShare: number = share ?? 0,
-): ProgressView {
+): PhaseView {
   const { fraction } = position(step, share);
   return {
     step,
@@ -87,9 +92,20 @@ function view(
   };
 }
 
+function rateLimitEnd(progress: AnalysisProgress): number | null {
+  if (progress.phase !== "listing" && progress.phase !== "fetching") return null;
+  if (progress.rateLimitedUntil === undefined) return null;
+  const until = Date.parse(progress.rateLimitedUntil);
+  return Number.isNaN(until) ? null : until;
+}
+
 // What the progress panel shows for a snapshot. The bar is determinate only once the step
 // knows its total (the listing after its first page, the fetch from the start).
 export function describeProgress(progress: AnalysisProgress): ProgressView {
+  return { ...describePhase(progress), rateLimitedUntil: rateLimitEnd(progress) };
+}
+
+function describePhase(progress: AnalysisProgress): PhaseView {
   switch (progress.phase) {
     case "listing-cache":
       return view(0, null, "Looking up the PR list", []);
@@ -147,8 +163,21 @@ export function describeProgress(progress: AnalysisProgress): ProgressView {
   }
 }
 
+export const RATE_LIMIT_WAIT_LABEL = "Waiting for GitHub rate limit";
+
+// The panel's line while a request waits for the rate limit, counted down in whole seconds.
+// The server clears the wait once it ends; until that snapshot arrives the line says so.
+export function rateLimitNotice(untilMs: number, nowMs: number): string {
+  const seconds = Math.max(0, Math.ceil((untilMs - nowMs) / 1000));
+  return seconds === 0
+    ? `${RATE_LIMIT_WAIT_LABEL}, resuming…`
+    : `${RATE_LIMIT_WAIT_LABEL}, resuming in ${keepNumbersWithUnits(`${seconds} s`)}`;
+}
+
 // One line for screen readers and logs: "Fetching PR details: vitejs/vite, 150 of 412 PRs".
+// A rate-limit wait is named without its countdown, which would change every second.
 export function progressSentence(view: ProgressView): string {
   const details = view.details.map((detail) => detail.replaceAll(" ", " "));
-  return details.length === 0 ? view.label : `${view.label}: ${details.join(", ")}`;
+  const sentence = details.length === 0 ? view.label : `${view.label}: ${details.join(", ")}`;
+  return view.rateLimitedUntil === null ? sentence : `${sentence}. ${RATE_LIMIT_WAIT_LABEL}`;
 }

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
-import { analyzeFormSchema, analyzeQuerySchema, parseList } from "./schemas.ts";
+import {
+  analysisProgressSchema,
+  analyzeFormSchema,
+  analyzeQuerySchema,
+  parseList,
+} from "./schemas.ts";
+import type { AnalysisProgress } from "./types.ts";
 
 // Late on 2026-10-09 in UTC, so a local-time "today" in a timezone ahead of UTC would differ.
 beforeEach(() => setSystemTime(new Date("2026-10-09T23:30:00Z")));
@@ -125,5 +131,54 @@ describe("analyzeFormSchema", () => {
     expect(
       analyzeFormSchema.safeParse({ ...form, since: "2026-10-02", until: "2026-10-01" }).success,
     ).toBe(true);
+  });
+});
+
+describe("analysisProgressSchema", () => {
+  const fetching = {
+    phase: "fetching",
+    repo: "honojs/hono",
+    repoIndex: 0,
+    repoCount: 1,
+    prsDone: 25,
+    prsTotal: 300,
+    repoPRsDone: 25,
+    repoPRsTotal: 300,
+    batchesDone: 1,
+    batchesTotal: 12,
+    reviewPRsDone: 0,
+    reviewPRsTotal: null,
+  } satisfies AnalysisProgress;
+  const listing = {
+    phase: "listing",
+    repo: "honojs/hono",
+    repoIndex: 0,
+    repoCount: 1,
+    listed: 0,
+    matching: null,
+    page: 0,
+    windowsDone: 0,
+    windowsTotal: 1,
+  } satisfies AnalysisProgress;
+  const until = "2026-10-10T12:00:30.000Z";
+
+  test("listing and fetching keep a rate-limit wait's end, and do without one", () => {
+    expect(analysisProgressSchema.parse({ ...fetching, rateLimitedUntil: until })).toEqual({
+      ...fetching,
+      rateLimitedUntil: until,
+    });
+    expect(analysisProgressSchema.parse({ ...listing, rateLimitedUntil: until })).toEqual({
+      ...listing,
+      rateLimitedUntil: until,
+    });
+    expect(analysisProgressSchema.parse(fetching)).toEqual(fetching);
+  });
+
+  test("rejects a wait's end that is not an ISO time", () => {
+    for (const rateLimitedUntil of ["in 30 s", "2026-10-10", 1_791_633_630_000, null]) {
+      expect(analysisProgressSchema.safeParse({ ...fetching, rateLimitedUntil }).success).toBe(
+        false,
+      );
+    }
   });
 });

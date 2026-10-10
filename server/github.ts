@@ -560,7 +560,13 @@ export function createGitHubClient({
             await sleep(backoffMs);
           } else {
             log.warn(`Waiting ${Math.ceil(outcome.waitMs / 1000)} s for the GitHub rate limit`);
-            await sleep(outcome.waitMs);
+            // The run shows the wait in its progress; plain backoff is too short to mention.
+            const endWait = run?.rateLimited(now() + outcome.waitMs);
+            try {
+              await sleep(outcome.waitMs);
+            } finally {
+              endWait?.();
+            }
           }
           break;
         }
