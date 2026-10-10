@@ -5,6 +5,7 @@ import {
   progressSentence,
   rateLimitNotice,
   type ProgressView,
+  type RepoLine,
 } from "../../../shared/progress";
 import type { RunProgress } from "../analysisState";
 
@@ -98,7 +99,46 @@ function StepMarker({ state }: { state: "done" | "current" | "todo" }) {
   }
 }
 
-// Replaces the spinner while an analysis runs: what the server is doing, on which repo, how
+// One line per repo under the totals when the step covers several. The live region reads the
+// totals only, so this list is there to look at and to browse, never announced.
+function RepoList({ lines }: { lines: RepoLine[] }) {
+  return (
+    <ul
+      aria-label="Repositories"
+      className="mt-2 grid w-fit max-w-full grid-cols-[auto_minmax(0,max-content)_auto] items-baseline gap-x-2 text-xs text-slate-500 tabular-nums dark:text-slate-400"
+    >
+      {lines.map(({ repo, detail, done }) => (
+        <li key={repo} className="col-span-3 grid grid-cols-subgrid">
+          <span className="w-3 text-center text-indigo-600 dark:text-indigo-400">
+            {done && (
+              <svg
+                className="inline h-2.5 w-2.5"
+                viewBox="0 0 12 12"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M2.5 6.5 5 9l4.5-6"
+                  stroke="currentColor"
+                  strokeWidth={1.75}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+          </span>
+          <span className="truncate">{repo}</span>
+          <span>
+            {detail}
+            {done && <span className="sr-only"> (done)</span>}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// Replaces the spinner while an analysis runs: what the server is doing, on which repos, how
 // far along, and the four steps of a run. The bar is determinate only once the current step
 // knows its total; before that a sweep runs over the part still to do.
 export function AnalysisProgressPanel({ progress, startedAt }: AnalysisProgressPanelProps) {
@@ -132,6 +172,8 @@ export function AnalysisProgressPanel({ progress, startedAt }: AnalysisProgressP
           </ul>
         )}
       </div>
+
+      {view.repos.length > 0 && <RepoList lines={view.repos} />}
 
       {/* The countdown ticks with the elapsed timer; the live region names the wait once. */}
       {view.rateLimitedUntil !== null && (
