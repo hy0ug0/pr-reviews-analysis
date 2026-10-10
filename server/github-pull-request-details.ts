@@ -1,5 +1,5 @@
 import type { RepoFetchProgress } from "../shared/types.ts";
-import { github, type GraphqlVariable } from "./github-client.ts";
+import { github, MAX_CONCURRENT_REQUESTS, type GraphqlVariable } from "./github-client.ts";
 import type { GitHubRun } from "./github-run.ts";
 import { allInOrder } from "./lib/concurrency.ts";
 import { parseRepo } from "./lib/parse-repo.ts";
@@ -32,9 +32,11 @@ const REVIEW_PAGE_SIZE = 100;
 // microsoft/vscode took 10 to 11 s and timed out, while 25 take 3 to 7.5 s (1 point). The
 // cost per PR is the same at both sizes, 1 point per 25 PRs, so 25 only adds calls.
 const PR_BATCH_SIZE = 25;
-// Per repo, for the batches and then the review pages. Repos run side by side, and the
-// GitHub client caps the requests in flight across all of them.
-const FETCH_CONCURRENCY = 5;
+// Per repo, for the batches and then the review pages. The GitHub client caps the requests
+// in flight across repos; a repo may use every slot, as one repo often holds most of the PRs,
+// and the cap per repo keeps repos taking turns in the client's queue rather than one repo
+// queueing all its batches ahead of the others.
+const FETCH_CONCURRENCY = MAX_CONCURRENT_REQUESTS;
 
 const PR_REVIEWS_QUERY = `
 query($owner: String!, $name: String!, $number: Int!, $first: Int!, $after: String) {

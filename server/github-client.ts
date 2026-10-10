@@ -30,8 +30,10 @@ const TOKEN_REJECTED_MESSAGE = "GitHub rejected the token. Run: gh auth login";
 const TRANSIENT_HTTP_STATUSES = new Set([500, 502, 503, 504]);
 // HTTP requests in flight at once across the whole process: every run, repo and suggestion
 // endpoint shares them. GitHub's secondary limits cap concurrent requests and points per
-// minute, so the client stays well under them.
-export const MAX_CONCURRENT_REQUESTS = 8;
+// minute, so this stays far below them. Measured on honojs/hono, colinhacks/zod and
+// oven-sh/bun for September 2026 (2,834 PRs, 227 requests, no rate limit hit), the detail
+// fetch took 53 s at 5, 27 s at 10, 23 s at 12 and 17 s at 16: 10 gets most of the gain.
+export const MAX_CONCURRENT_REQUESTS = 10;
 
 // What GitHub sends back, before `data` is trusted as the query's type.
 const graphqlEnvelopeSchema = z.object({
