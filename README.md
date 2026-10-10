@@ -80,6 +80,16 @@ Three cards under the first response section follow a PR from review to merge. E
 
 Time to approval and review rounds count the same reviews as first response: reviews by the PR author or by deleted accounts never count, reviews by bots count only with **Include bots** ticked, and with a team filter only team members' reviews count. Time to merge doesn't depend on reviews, so the team filter doesn't change it. When some of a PR's reviews couldn't be fetched and the missing ones may change the result, the PR is left out and counted as such.
 
+## Who reviews whom
+
+The **Who reviews whom** matrix crosses PR authors (rows) with reviewers (columns). It counts the same reviews as the reviewer table, so each column total matches that reviewer's **Total** (or **PRs**), and the whole matrix adds up to **Total Reviews**:
+
+- **Reviews** counts every review a reviewer left on an author's PRs. **PRs** counts the author's PRs they reviewed, so five comment reviews on one PR count once.
+- With a team filter, only team members' reviews count, but on anyone's PRs, so authors outside the team still get rows.
+- A PR whose author GitHub can't resolve, usually a deleted account, gets a **Deleted account** row.
+- Rows and columns are ordered by their total. The top 15 of each show by default and the rest fold into an **others** row and column. **Show all** lists everyone.
+- The shade follows the square root of the count, scaled to the busiest author and reviewer pair. Folded and total cells aren't shaded. Every cell prints its count, and **Export CSV** downloads the whole matrix.
+
 ## Cache
 
 The server caches GitHub data on disk in two tiers:

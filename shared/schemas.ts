@@ -193,6 +193,13 @@ export const reviewCycleSummarySchema = z.object({
   }),
 });
 
+export const reviewMatrixCellSchema = z.object({
+  author: z.string().nullable(),
+  reviewer: z.string(),
+  reviews: z.number(),
+  prs: z.number(),
+});
+
 export const dataSourceSchema = z.object({
   listing: z.enum(["cache", "github"]),
   listedAt: z.string(),
@@ -218,6 +225,7 @@ const analysisFieldsSchema = z.object({
   reviewerStats: z.array(reviewerStatsSchema),
   firstResponse: firstResponseSummarySchema,
   reviewCycle: reviewCycleSummarySchema,
+  reviewMatrix: z.array(reviewMatrixCellSchema),
   timeRange: z.object({ since: z.string(), until: z.string() }),
   dataSource: dataSourceSchema.optional(),
 });

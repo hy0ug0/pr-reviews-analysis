@@ -5,6 +5,7 @@ import type {
   ReviewerStats,
 } from "../../shared/types.ts";
 import { summarizeFirstResponse } from "./first-response.ts";
+import { summarizeReviewMatrix } from "./review-matrix.ts";
 import { NO_REVIEWER_RESPONSES, summarizeReviewerResponses } from "./reviewer-response.ts";
 import { summarizeReviewCycle } from "./review-cycle.ts";
 import {
@@ -114,6 +115,14 @@ export function analyze(loadedPRs: PullRequest[], options: AnalyzeOptions): Anal
       teamMembers: options.teamMembers,
       includeBots: options.includeBots,
       botLogins: options.botLogins,
+    }),
+    reviewMatrix: summarizeReviewMatrix({
+      prs,
+      teamMembers: options.teamMembers,
+      includeBots: options.includeBots,
+      botLogins: options.botLogins,
+      since: options.since,
+      until: options.until,
     }),
     timeRange: {
       since: options.since || "",
