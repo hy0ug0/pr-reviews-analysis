@@ -2,7 +2,6 @@ import { GITHUB_EPOCH_DATE, todayUtc } from "../shared/schemas.ts";
 import type { RepoListingProgress } from "../shared/types.ts";
 import { github, type GraphqlVariable } from "./github-client.ts";
 import type { GitHubRun } from "./github-run.ts";
-import { allInOrder } from "./lib/concurrency.ts";
 import { uniqueReasons } from "./lib/partial-reasons.ts";
 import { createRepoProgress } from "./lib/repo-progress.ts";
 import { createLogger } from "./logger.ts";
@@ -315,10 +314,17 @@ export async function listRepoPullRequests({
   return { prs, matchingPRs, isComplete, partialReasons };
 }
 
+// Thrown to a repo's listing when another repo's listing has failed.
+class ListingStopped extends Error {
+  constructor() {
+    super("Listing stopped: another repo failed.");
+  }
+}
+
 // Lists the PRs created in the range, every repo at once: the GitHub client caps the
 // requests in flight. Oversized windows are split to get past the 1000-result Search limit.
-// The result keeps the order of `repos`, and a repo that fails fails the listing with the
-// error the first failing repo in that order gives. Repos are expected normalized (see
+// The result keeps the order of `repos`. A repo that fails fails the listing, with the error
+// of the first repo in that order that failed on its own. Repos are expected normalized (see
 // normalizeRepos).
 export async function listPullRequests(
   {
@@ -339,7 +345,11 @@ export async function listPullRequests(
     `Starting listing across ${repos.length} repos in range ${dateRange.since}..${dateRange.until}${label ? ` [label:${label}]` : ""}`,
   );
 
+  // Once a repo fails, the listing has failed: the other repos send no further page, so the
+  // failed load stops spending quota and competing with a retry. Requests in flight settle.
+  let failed = false;
   const searchPage: SearchPullRequestPage = (searchQuery, after) => {
+    if (failed) return Promise.reject(new ListingStopped());
     const variables: Record<string, GraphqlVariable> = { searchQuery, first: SEARCH_PAGE_SIZE };
     if (after) variables.after = after;
     return github.query<ListingResponse>(PR_LISTING_QUERY, variables, run);
@@ -349,7 +359,7 @@ export async function listPullRequests(
     entries: repos.map((repo) => ({ repo, ...NOT_LISTED })),
     publish: (entries) => run.report({ phase: "listing", repos: entries }),
   });
-  const repoListings = await allInOrder(
+  const outcomes = await Promise.allSettled(
     repos.map((repo) =>
       listRepoPullRequests({
         repo,
@@ -357,9 +367,24 @@ export async function listPullRequests(
         range: dateRange,
         searchPage,
         onProgress: (counts) => reportRepo({ repo, ...counts }),
+      }).catch((error: unknown) => {
+        if (!(error instanceof ListingStopped)) failed = true;
+        throw error;
       }),
     ),
   );
+
+  // A repo stopped because another failed says nothing, so the error is the first real one
+  // in query order.
+  const repoListings: PullRequestListing[] = [];
+  let firstError: { error: unknown } | null = null;
+  for (const outcome of outcomes) {
+    if (outcome.status === "fulfilled") repoListings.push(outcome.value);
+    else if (!(outcome.reason instanceof ListingStopped)) {
+      firstError ??= { error: outcome.reason };
+    }
+  }
+  if (firstError) throw firstError.error;
 
   const prs: ListedPullRequest[] = [];
   const partialReasons: string[] = [];

@@ -622,6 +622,27 @@ describe("concurrency limit", () => {
     expect(peak).toBe(3);
   });
 
+  test("a run counts a request once it is sent, not while it waits for a slot", async () => {
+    const release = Promise.withResolvers<void>();
+    const { client, calls } = fakeGitHub(
+      async () => {
+        await release.promise;
+        return ok();
+      },
+      { maxConcurrentRequests: 1 },
+    );
+    const run = createGitHubRun();
+
+    const first = client.query<Data>(QUERY, {}, run);
+    const second = client.query<Data>(QUERY, {}, run);
+    while (calls.length === 0) await Bun.sleep(1);
+
+    expect(run.requests).toBe(1);
+    release.resolve();
+    expect(await Promise.all([first, second])).toEqual([DATA, DATA]);
+    expect(run.requests).toBe(2);
+  });
+
   // With one slot, a request that kept it would leave the next one waiting forever.
   test("frees the slot when a request fails, times out or cannot connect", async () => {
     const { client } = fakeGitHub(

@@ -21,6 +21,8 @@ interface FakeRepo {
 }
 
 let fakeRepos = new Map<string, FakeRepo>();
+// Each search request, as "repo page", in the order they were sent.
+const searches: string[] = [];
 let inFlight = 0;
 let peakInFlight = 0;
 const reposInFlight = new Map<string, number>();
@@ -73,6 +75,7 @@ function answer(body: string): { repo: string; response: unknown } {
   if (typeof searchQuery === "string") {
     const repo = /repo:(\S+)/.exec(searchQuery)?.[1] ?? "";
     const { numbers, failListing } = fakeRepo(repo);
+    searches.push(`${repo} ${typeof after === "string" ? after : "first"}`);
     if (failListing) {
       return {
         repo,
@@ -174,6 +177,7 @@ function setRepos(delays: number[], extra: Partial<Record<string, Partial<FakeRe
 }
 
 beforeEach(() => {
+  searches.length = 0;
   inFlight = 0;
   peakInFlight = 0;
   reposInFlight.clear();
@@ -254,6 +258,41 @@ describe("listPullRequests", () => {
     expect(await rejection(listPullRequests({ repos: REPOS, ...RANGE }, createGitHubRun()))).toBe(
       "Cannot search acme/b",
     );
+  });
+});
+
+describe("listPullRequests after a repo fails", () => {
+  function setFakeRepos(repos: Record<string, FakeRepo>) {
+    fakeRepos = new Map(Object.entries(repos));
+  }
+
+  test("the other repos send no further page, and the listing rejects with the failure", async () => {
+    // acme/a fails on its first page while acme/z, 3 pages long, is still on its first.
+    setFakeRepos({
+      "acme/a": { numbers: [], delayMs: 1, failListing: true },
+      "acme/z": { numbers: range(1, 250), delayMs: 10 },
+    });
+
+    const message = await rejection(
+      listPullRequests({ repos: ["acme/a", "acme/z"], ...RANGE }, createGitHubRun()),
+    );
+
+    expect(message).toBe("Cannot search acme/a");
+    expect(searches).toEqual(["acme/a first", "acme/z first"]);
+  });
+
+  test("an earlier repo stopped by a later failure does not hide that failure", async () => {
+    setFakeRepos({
+      "acme/a": { numbers: range(1, 250), delayMs: 10 },
+      "acme/b": { numbers: [], delayMs: 1, failListing: true },
+    });
+
+    const message = await rejection(
+      listPullRequests({ repos: ["acme/a", "acme/b"], ...RANGE }, createGitHubRun()),
+    );
+
+    expect(message).toBe("Cannot search acme/b");
+    expect(searches.filter((search) => search.startsWith("acme/a"))).toEqual(["acme/a first"]);
   });
 });
 

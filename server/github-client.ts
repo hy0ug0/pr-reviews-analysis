@@ -254,7 +254,8 @@ export function createGitHubClient({
 }: GitHubClientOptions = {}): GitHubClient {
   const slots = createSemaphore(maxConcurrentRequests);
 
-  // Every HTTP attempt goes through here, so a run counts each one, retries included.
+  // Every HTTP attempt goes through here, so a run counts each one, retries included. It is
+  // counted once it has a slot and is sent, not while it waits for one.
   // The attempt holds a slot for the HTTP exchange only: request() sleeps for backoff and
   // rate limits after the slot is freed, so a waiting request never holds one.
   function attempt<T>(
@@ -263,8 +264,10 @@ export function createGitHubClient({
     run: GitHubRun | undefined,
     acceptPartial: boolean,
   ): Promise<AttemptOutcome<T>> {
-    if (run) run.requests++;
-    return slots.run(() => exchange<T>(body, token, acceptPartial));
+    return slots.run(() => {
+      if (run) run.requests++;
+      return exchange<T>(body, token, acceptPartial);
+    });
   }
 
   async function exchange<T>(
