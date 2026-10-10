@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { GitHubRun } from "./github-run.ts";
 import { githubToken, type TokenProvider } from "./github-token.ts";
+import { createSemaphore } from "./lib/concurrency.ts";
 import { createLogger } from "./logger.ts";
 import type { GraphqlError } from "./pull-request-details.ts";
 
@@ -27,6 +28,10 @@ const SECONDARY_RATE_LIMIT_WAIT_MS = 60_000;
 const MAX_RATE_LIMIT_WAIT_MS = 60_000;
 const TOKEN_REJECTED_MESSAGE = "GitHub rejected the token. Run: gh auth login";
 const TRANSIENT_HTTP_STATUSES = new Set([500, 502, 503, 504]);
+// HTTP requests in flight at once across the whole process: every run, repo and suggestion
+// endpoint shares them. GitHub's secondary limits cap concurrent requests and points per
+// minute, so the client stays well under them.
+export const MAX_CONCURRENT_REQUESTS = 8;
 
 // What GitHub sends back, before `data` is trusted as the query's type.
 const graphqlEnvelopeSchema = z.object({
@@ -51,6 +56,7 @@ export interface GitHubClientOptions {
   // Epoch milliseconds, for rate-limit reset headers.
   now?: () => number;
   deadlineMs?: number;
+  maxConcurrentRequests?: number;
 }
 
 export interface GitHubClient {
@@ -242,16 +248,30 @@ export function createGitHubClient({
   sleep = delay,
   now = Date.now,
   deadlineMs = REQUEST_DEADLINE_MS,
+  maxConcurrentRequests = MAX_CONCURRENT_REQUESTS,
 }: GitHubClientOptions = {}): GitHubClient {
+  const slots = createSemaphore(maxConcurrentRequests);
+
   // Every HTTP attempt goes through here, so a run counts each one, retries included.
-  async function attempt<T>(
+  // The attempt holds a slot for the HTTP exchange only: request() sleeps for backoff and
+  // rate limits after the slot is freed, so a waiting request never holds one.
+  function attempt<T>(
     body: string,
     token: string,
     run: GitHubRun | undefined,
     acceptPartial: boolean,
   ): Promise<AttemptOutcome<T>> {
     if (run) run.requests++;
-    // One deadline for the whole exchange, body read included.
+    return slots.run(() => exchange<T>(body, token, acceptPartial));
+  }
+
+  async function exchange<T>(
+    body: string,
+    token: string,
+    acceptPartial: boolean,
+  ): Promise<AttemptOutcome<T>> {
+    // One deadline for the whole exchange, body read included. It starts once the slot is
+    // free, so time spent queued behind other requests does not count against it.
     const signal = AbortSignal.timeout(deadlineMs);
     let response: Response;
     let text: string;

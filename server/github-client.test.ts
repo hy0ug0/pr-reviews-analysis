@@ -82,7 +82,10 @@ function brokenBody(init: ResponseInit): Respond {
 
 // A GitHub whose answers the test scripts. The token provider hands out TOKEN, then
 // REFRESHED_TOKEN after a refresh. Sleeps return at once and record the wait.
-function fakeGitHub(respond: Respond, options: Pick<GitHubClientOptions, "deadlineMs"> = {}) {
+function fakeGitHub(
+  respond: Respond,
+  options: Pick<GitHubClientOptions, "deadlineMs" | "maxConcurrentRequests"> = {},
+) {
   const calls: Call[] = [];
   const waits: number[] = [];
   let refreshes = 0;
@@ -592,6 +595,89 @@ describe("runs", () => {
     expect(b).toEqual({ status: "fulfilled", value: { repo: "b" } });
     expect(runA.requests).toBe(3);
     expect(runB.requests).toBe(1);
+  });
+});
+
+describe("concurrency limit", () => {
+  test("never has more requests in flight than the limit, across concurrent queries", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const { client, calls } = fakeGitHub(
+      async () => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await Bun.sleep(5);
+        inFlight--;
+        return ok();
+      },
+      { maxConcurrentRequests: 3 },
+    );
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => client.query<Data>(QUERY, {}, createGitHubRun())),
+    );
+
+    expect(results).toEqual(Array.from({ length: 10 }, () => DATA));
+    expect(calls).toHaveLength(10);
+    expect(peak).toBe(3);
+  });
+
+  // With one slot, a request that kept it would leave the next one waiting forever.
+  test("frees the slot when a request fails, times out or cannot connect", async () => {
+    const { client } = fakeGitHub(
+      (call) => {
+        const body = bodyOf(call);
+        if (body.includes("missing")) return json({ message: "Not Found" }, { status: 404 });
+        if (body.includes("stuck")) return hang(call);
+        if (body.includes("offline")) return networkError();
+        return ok();
+      },
+      { maxConcurrentRequests: 1, deadlineMs: 20 },
+    );
+
+    const outcomes = await Promise.allSettled([
+      client.query<Data>("query { missing }"),
+      client.query<Data>("query { stuck }"),
+      client.query<Data>("query { offline }"),
+      client.query<Data>(QUERY),
+    ]);
+
+    expect(outcomes.map((outcome) => outcome.status)).toEqual([
+      "rejected",
+      "rejected",
+      "rejected",
+      "fulfilled",
+    ]);
+  });
+
+  test("a request waiting for the rate limit frees its slot for the others", async () => {
+    let limitedCalls = 0;
+    const asleep = Promise.withResolvers<void>();
+    const wake = Promise.withResolvers<void>();
+    const client = createGitHubClient({
+      fetch: (_url, init) => {
+        const limited = typeof init.body === "string" && init.body.includes("limited");
+        if (limited && limitedCalls++ === 0) {
+          return Promise.resolve(json({}, { status: 429, headers: { "retry-after": "30" } }));
+        }
+        return Promise.resolve(ok());
+      },
+      tokenProvider: { get: () => Promise.resolve(TOKEN), refresh: () => Promise.resolve(TOKEN) },
+      sleep: () => {
+        asleep.resolve();
+        return wake.promise;
+      },
+      now: () => NOW,
+      maxConcurrentRequests: 1,
+    });
+
+    const limited = client.query<Data>("query { limited }");
+    await asleep.promise;
+
+    expect(await client.query<Data>(QUERY)).toEqual(DATA);
+    wake.resolve();
+    expect(await limited).toEqual(DATA);
+    expect(limitedCalls).toBe(2);
   });
 });
 

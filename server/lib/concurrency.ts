@@ -28,3 +28,43 @@ export async function mapWithConcurrency<T, R>(
     return result;
   });
 }
+
+export interface Semaphore {
+  // Runs `task` once a slot is free and frees it when the task settles, whatever the outcome.
+  // Waiting tasks start in the order they asked.
+  run<T>(task: () => Promise<T>): Promise<T>;
+}
+
+export function createSemaphore(limit: number): Semaphore {
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error(`A semaphore needs a whole number of slots of at least 1, got ${limit}.`);
+  }
+  let inUse = 0;
+  const waiting: Array<() => void> = [];
+
+  async function acquire(): Promise<void> {
+    if (inUse < limit) {
+      inUse++;
+      return;
+    }
+    // The releasing task hands its slot over, so inUse stays the same.
+    await new Promise<void>((resolve) => waiting.push(resolve));
+  }
+
+  function release() {
+    const next = waiting.shift();
+    if (next) next();
+    else inUse--;
+  }
+
+  return {
+    async run(task) {
+      await acquire();
+      try {
+        return await task();
+      } finally {
+        release();
+      }
+    },
+  };
+}
