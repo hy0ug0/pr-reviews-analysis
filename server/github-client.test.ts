@@ -643,6 +643,80 @@ describe("concurrency limit", () => {
     expect(run.requests).toBe(2);
   });
 
+  test("a request aborted while it waits for a slot is not sent, and rejects with the reason", async () => {
+    const release = Promise.withResolvers<void>();
+    const { client, calls } = fakeGitHub(
+      async () => {
+        await release.promise;
+        return ok();
+      },
+      { maxConcurrentRequests: 1 },
+    );
+    const stop = new AbortController();
+    const reason = new Error("stopped");
+
+    const first = client.query<Data>(QUERY);
+    const second = client
+      .query<Data>(QUERY, {}, undefined, stop.signal)
+      .catch((error: unknown) => error);
+    while (calls.length === 0) await Bun.sleep(1);
+    stop.abort(reason);
+    release.resolve();
+
+    expect(await first).toEqual(DATA);
+    expect(await second).toBe(reason);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("an aborted request sends no retry", async () => {
+    const stop = new AbortController();
+    const reason = new Error("stopped");
+    const { client, calls } = fakeGitHub(() => {
+      stop.abort(reason);
+      return json({ message: "Bad Gateway" }, { status: 502 });
+    });
+
+    const failure = await client
+      .query<Data>(QUERY, {}, undefined, stop.signal)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBe(reason);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("an abort ends a rate-limit wait at once", async () => {
+    const stop = new AbortController();
+    const reason = new Error("stopped");
+    let calls = 0;
+    const client = createGitHubClient({
+      fetch: () => {
+        calls++;
+        return Promise.resolve(
+          json({ message: "Too many requests" }, { status: 429, headers: { "Retry-After": "60" } }),
+        );
+      },
+      tokenProvider: { get: () => Promise.resolve(TOKEN), refresh: () => Promise.resolve(TOKEN) },
+      // A wait that never ends on its own.
+      sleep: () => new Promise(() => {}),
+      now: () => NOW,
+    });
+    const run = createGitHubRun();
+    const waiting = Promise.withResolvers<void>();
+    run.rateLimited = () => {
+      waiting.resolve();
+      return () => {};
+    };
+
+    const failure = client
+      .query<Data>(QUERY, {}, run, stop.signal)
+      .catch((error: unknown) => error);
+    await waiting.promise;
+    stop.abort(reason);
+
+    expect(await failure).toBe(reason);
+    expect(calls).toBe(1);
+  });
+
   // With one slot, a request that kept it would leave the next one waiting forever.
   test("frees the slot when a request fails, times out or cannot connect", async () => {
     const { client } = fakeGitHub(

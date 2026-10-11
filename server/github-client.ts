@@ -62,8 +62,15 @@ export interface GitHubClientOptions {
 }
 
 export interface GitHubClient {
-  // Resolves with the query's data; any GraphQL error rejects.
-  query<T>(query: string, variables?: GraphqlVariables, run?: GitHubRun): Promise<T>;
+  // Resolves with the query's data; any GraphQL error rejects. Once `signal` aborts, no
+  // further attempt is sent, a backoff or rate-limit wait ends, and the query rejects with
+  // its reason. An attempt already sent is not cut short.
+  query<T>(
+    query: string,
+    variables?: GraphqlVariables,
+    run?: GitHubRun,
+    signal?: AbortSignal,
+  ): Promise<T>;
   // Resolves with whatever data came back and its errors, as a batch query can answer
   // some aliases and fail others. Rejects only when there is no data at all.
   queryPartial<T>(
@@ -258,13 +265,16 @@ export function createGitHubClient({
   // counted once it has a slot and is sent, not while it waits for one.
   // The attempt holds a slot for the HTTP exchange only: request() sleeps for backoff and
   // rate limits after the slot is freed, so a waiting request never holds one.
+  // A request aborted while it waits for a slot is not sent.
   function attempt<T>(
     body: string,
     token: string,
     run: GitHubRun | undefined,
     acceptPartial: boolean,
+    signal: AbortSignal | undefined,
   ): Promise<AttemptOutcome<T>> {
-    return slots.run(() => {
+    return slots.run(async () => {
+      signal?.throwIfAborted();
       if (run) run.requests++;
       return exchange<T>(body, token, acceptPartial);
     });
@@ -322,11 +332,25 @@ export function createGitHubClient({
 
   // Up to GRAPHQL_MAX_ATTEMPTS attempts on transient failures. A 401 refreshes the token
   // and tries once more without using up an attempt; a second 401 means the login is bad.
+  // Waits like `sleep`, but rejects with the abort reason as soon as `signal` aborts.
+  function wait(ms: number, signal: AbortSignal | undefined): Promise<void> {
+    if (!signal) return sleep(ms);
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      sleep(ms)
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener("abort", onAbort));
+    });
+  }
+
   async function request<T>(
     query: string,
     variables: GraphqlVariables,
     run: GitHubRun | undefined,
     acceptPartial: boolean,
+    signal?: AbortSignal,
   ): Promise<GraphqlResponse<T>> {
     const body = buildBody(query, variables);
     let token = await tokenProvider.get();
@@ -334,7 +358,7 @@ export function createGitHubClient({
     let failures = 0;
 
     while (true) {
-      const outcome = await attempt<T>(body, token, run, acceptPartial);
+      const outcome = await attempt<T>(body, token, run, acceptPartial, signal);
       switch (outcome.kind) {
         case "ok":
           return outcome.response;
@@ -355,13 +379,13 @@ export function createGitHubClient({
           if (outcome.waitMs === undefined) {
             const backoffMs = 200 * 2 ** (failures - 1);
             log.warn(`Retrying GraphQL request in ${backoffMs}ms`);
-            await sleep(backoffMs);
+            await wait(backoffMs, signal);
           } else {
             log.warn(`Waiting ${Math.ceil(outcome.waitMs / 1000)} s for the GitHub rate limit`);
             // The run shows the wait in its progress; plain backoff is too short to mention.
             const endWait = run?.rateLimited(now() + outcome.waitMs);
             try {
-              await sleep(outcome.waitMs);
+              await wait(outcome.waitMs, signal);
             } finally {
               endWait?.();
             }
@@ -377,8 +401,13 @@ export function createGitHubClient({
   }
 
   return {
-    async query<T>(query: string, variables: GraphqlVariables = {}, run?: GitHubRun) {
-      const response = await request<T>(query, variables, run, false);
+    async query<T>(
+      query: string,
+      variables: GraphqlVariables = {},
+      run?: GitHubRun,
+      signal?: AbortSignal,
+    ) {
+      const response = await request<T>(query, variables, run, false, signal);
       return response.data;
     },
     queryPartial: <T>(query: string, variables: GraphqlVariables, run?: GitHubRun) =>

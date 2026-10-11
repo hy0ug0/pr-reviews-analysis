@@ -260,7 +260,6 @@ export const analysisProgressSchema = z.discriminatedUnion("phase", [
         repo: z.string(),
         listed: z.number(),
         matching: z.number().nullable(),
-        page: z.number(),
         windowsDone: z.number(),
         windowsTotal: z.number(),
       }),

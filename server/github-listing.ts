@@ -151,8 +151,8 @@ export type SearchPullRequestPage = (
   after: string | null,
 ) => Promise<ListingResponse>;
 
-// Called after each page kept in a window, with the PRs listed in it so far.
-type OnWindowPage = (page: { listed: number; issueCount: number; page: number }) => void;
+// Called after each page kept in a window, with that page's PR count.
+type OnWindowPage = (page: { prs: number; issueCount: number }) => void;
 
 async function listWindowPullRequests(
   repo: string,
@@ -188,7 +188,7 @@ async function listWindowPullRequests(
   log.info(
     `Window ${window.since}..${window.until}: listed page 1 (${prs.length}/${issueCount} PRs)`,
   );
-  onPage({ listed: prs.length, issueCount, page: pagesFetched });
+  onPage({ prs: firstPage.search.nodes.length, issueCount });
 
   while (hasNextPage) {
     if (pagesFetched >= MAX_SEARCH_PAGES) {
@@ -210,11 +210,33 @@ async function listWindowPullRequests(
     log.info(
       `Window ${window.since}..${window.until}: listed page ${pagesFetched} (${prs.length}/${issueCount} PRs)`,
     );
-    onPage({ listed: prs.length, issueCount, page: pagesFetched });
+    onPage({ prs: page.search.nodes.length, issueCount });
   }
 
   log.info(`Completed window ${window.since}..${window.until}: ${prs.length} PRs listed`);
   return { kind: "listed", issueCount, prs, isComplete, partialReasons };
+}
+
+type ListedWindow = Extract<ListWindowResult, { kind: "listed" }>;
+
+// Thrown to a window's next page once the listing has failed elsewhere: in another window
+// or another repo.
+class ListingStopped extends Error {
+  constructor() {
+    super("Listing stopped: another window or repo failed.");
+  }
+}
+
+// Waits for every part, then rejects with the first failure in date order that is not a
+// stop, so a window stopped by a sibling's failure never hides that failure.
+async function settleParts(parts: Array<Promise<ListedWindow[]>>): Promise<ListedWindow[]> {
+  const outcomes = await Promise.allSettled(parts);
+  const failures = outcomes.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason as unknown] : [],
+  );
+  const failure = failures.find((reason) => !(reason instanceof ListingStopped)) ?? failures[0];
+  if (failure !== undefined) throw failure;
+  return outcomes.flatMap((outcome) => (outcome.status === "fulfilled" ? outcome.value : []));
 }
 
 // How far one repo's listing is. `matching` is the whole range's count, from the first page
@@ -224,14 +246,16 @@ export type RepoListingCounts = Omit<RepoListingProgress, "repo">;
 const NOT_LISTED: RepoListingCounts = {
   listed: 0,
   matching: null,
-  page: 0,
   windowsDone: 0,
   windowsTotal: 1,
 };
 
 // Lists one repo's PRs in the range, splitting windows past the 1000-result Search limit.
-// onProgress gets a snapshot before the first page, after each page, and once the repo is
-// listed, with windowsDone equal to windowsTotal.
+// The parts of a split window are listed side by side; searchPage caps the requests in
+// flight. onProgress gets a snapshot before the first page, after each page, split and
+// window listed, and once the repo is listed, with windowsDone equal to windowsTotal. A
+// window that fails fails the listing with its error once the other windows settle; with
+// listPullRequests, they send no further page.
 export async function listRepoPullRequests({
   repo,
   label,
@@ -246,87 +270,65 @@ export async function listRepoPullRequests({
   onProgress?: (progress: RepoListingCounts) => void;
 }): Promise<PullRequestListing> {
   log.info(`Starting repo listing for ${repo} in range ${range.since}..${range.until}`);
-  const windowsToList: DateWindow[] = [{ ...range }];
+  // `listed` adds up each window's pages as they come; the end snapshot counts unique PRs.
+  const counts: RepoListingCounts = { ...NOT_LISTED };
+  onProgress({ ...counts });
+
+  // Lists a window, or the parts it is cut into, and resolves with the listed windows in
+  // date order. The range is the first window, so its count is the first one known.
+  async function listWindow(window: DateWindow): Promise<ListedWindow[]> {
+    const result = await listWindowPullRequests(
+      repo,
+      label,
+      window,
+      searchPage,
+      ({ prs, issueCount }) => {
+        counts.matching ??= issueCount;
+        counts.listed += prs;
+        onProgress({ ...counts });
+      },
+    );
+    counts.matching ??= result.issueCount;
+
+    if (result.kind === "listed") {
+      counts.windowsDone++;
+      // The last window's snapshot waits for the end one, which counts unique PRs.
+      if (counts.windowsDone < counts.windowsTotal) onProgress({ ...counts });
+      return [result];
+    }
+
+    log.info(
+      `Window ${window.since}..${window.until} has ${result.issueCount} matches; splitting into ${result.parts.length} windows`,
+    );
+    counts.windowsTotal += result.parts.length - 1;
+    onProgress({ ...counts });
+    return settleParts(result.parts.map(listWindow));
+  }
+
+  const windows = await listWindow({ ...range });
+
   const partialReasons: string[] = [];
   const seen = new Set<number>();
   const prs: ListedPullRequest[] = [];
   let matchingPRs = 0;
   let isComplete = true;
-  let rangeMatching: number | null = null;
-  let windowsDone = 0;
-  let lastPage = 0;
-  // The window being listed counts too, so the total includes it.
-  const windowsTotal = () => windowsDone + windowsToList.length + 1;
-  onProgress(NOT_LISTED);
+  for (const window of windows) {
+    matchingPRs += window.issueCount;
+    if (!window.isComplete) isComplete = false;
+    partialReasons.push(...window.partialReasons);
 
-  while (windowsToList.length > 0) {
-    const window = windowsToList.pop()!;
-    const windowResult = await listWindowPullRequests(
-      repo,
-      label,
-      window,
-      searchPage,
-      ({ listed, issueCount, page }) => {
-        rangeMatching ??= issueCount;
-        lastPage = page;
-        onProgress({
-          listed: seen.size + listed,
-          matching: rangeMatching,
-          page,
-          windowsDone,
-          windowsTotal: windowsTotal(),
-        });
-      },
-    );
-    rangeMatching ??= windowResult.issueCount;
-
-    if (windowResult.kind === "split") {
-      const { parts } = windowResult;
-      log.info(
-        `Window ${window.since}..${window.until} has ${windowResult.issueCount} matches; splitting into ${parts.length} windows`,
-      );
-      // Pushed last part first, so the parts are listed in date order.
-      windowsToList.push(...[...parts].reverse());
-      onProgress({
-        listed: seen.size,
-        matching: rangeMatching,
-        page: 0,
-        windowsDone,
-        windowsTotal: windowsTotal() - 1,
-      });
-      continue;
-    }
-
-    matchingPRs += windowResult.issueCount;
-    if (!windowResult.isComplete) isComplete = false;
-    partialReasons.push(...windowResult.partialReasons);
-
-    for (const pr of windowResult.prs) {
+    for (const pr of window.prs) {
       if (seen.has(pr.number)) continue;
       seen.add(pr.number);
       prs.push({ repo, number: pr.number, updatedAt: pr.updatedAt });
     }
-    windowsDone++;
   }
-  onProgress({
-    listed: seen.size,
-    matching: rangeMatching,
-    page: lastPage,
-    windowsDone,
-    windowsTotal: windowsDone,
-  });
+  onProgress({ ...counts, listed: prs.length });
 
   log.info(
     `Completed repo listing for ${repo}: ${prs.length} PRs listed, matching ${matchingPRs}, complete=${isComplete}`,
   );
   return { prs, matchingPRs, isComplete, partialReasons };
-}
-
-// Thrown to a repo's listing when another repo's listing has failed.
-class ListingStopped extends Error {
-  constructor() {
-    super("Listing stopped: another repo failed.");
-  }
 }
 
 // Lists the PRs created in the range, every repo at once: the GitHub client caps the
@@ -353,14 +355,25 @@ export async function listPullRequests(
     `Starting listing across ${repos.length} repos in range ${dateRange.since}..${dateRange.until}${label ? ` [label:${label}]` : ""}`,
   );
 
-  // Once a repo fails, the listing has failed: the other repos send no further page, so the
-  // failed load stops spending quota and competing with a retry. Requests in flight settle.
-  let failed = false;
+  // Once a request fails, the listing has failed: no window of any repo sends a further
+  // page, even one queued for a slot or waiting to retry, so the failed load stops spending
+  // quota and competing with a retry. Requests in flight settle. A slot freed in the same
+  // moment as the failure can still pass to a queued page before the stop lands, so up to
+  // one request per slot may follow it.
+  const stop = new AbortController();
+  const stopOn = (error: unknown) => {
+    if (!(error instanceof ListingStopped)) stop.abort(new ListingStopped());
+  };
   const searchPage: SearchPullRequestPage = (searchQuery, after) => {
-    if (failed) return Promise.reject(new ListingStopped());
+    if (stop.signal.aborted) return Promise.reject(new ListingStopped());
     const variables: Record<string, GraphqlVariable> = { searchQuery, first: SEARCH_PAGE_SIZE };
     if (after) variables.after = after;
-    return github.query<ListingResponse>(PR_LISTING_QUERY, variables, run);
+    return github
+      .query<ListingResponse>(PR_LISTING_QUERY, variables, run, stop.signal)
+      .catch((error: unknown) => {
+        stopOn(error);
+        throw error;
+      });
   };
 
   const reportRepo = createRepoProgress<RepoListingProgress>({
@@ -376,7 +389,7 @@ export async function listPullRequests(
         searchPage,
         onProgress: (counts) => reportRepo({ repo, ...counts }),
       }).catch((error: unknown) => {
-        if (!(error instanceof ListingStopped)) failed = true;
+        stopOn(error);
         throw error;
       }),
     ),

@@ -193,14 +193,13 @@ export interface DataSource {
 }
 
 // One repo's listing. `matching` is the repo's total for the range, known after its first
-// page. A range with more than 1,000 PRs is split into date windows, listed one by one:
+// page. A range with more than 1,000 PRs is split into date windows, listed side by side:
 // windowsTotal grows when a window is split, and windowsDone reaches it once the repo is
 // listed.
 export interface RepoListingProgress {
   repo: string;
   listed: number;
   matching: number | null;
-  page: number;
   windowsDone: number;
   windowsTotal: number;
 }
