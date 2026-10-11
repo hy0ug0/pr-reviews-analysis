@@ -219,6 +219,26 @@ async function listWindowPullRequests(
 
 type ListedWindow = Extract<ListWindowResult, { kind: "listed" }>;
 
+// Thrown to a window's next page once the listing has failed elsewhere: in another window
+// or another repo.
+class ListingStopped extends Error {
+  constructor() {
+    super("Listing stopped: another window or repo failed.");
+  }
+}
+
+// Waits for every part, then rejects with the first failure in date order that is not a
+// stop, so a window stopped by a sibling's failure never hides that failure.
+async function settleParts(parts: Array<Promise<ListedWindow[]>>): Promise<ListedWindow[]> {
+  const outcomes = await Promise.allSettled(parts);
+  const failures = outcomes.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason as unknown] : [],
+  );
+  const failure = failures.find((reason) => !(reason instanceof ListingStopped)) ?? failures[0];
+  if (failure !== undefined) throw failure;
+  return outcomes.flatMap((outcome) => (outcome.status === "fulfilled" ? outcome.value : []));
+}
+
 // How far one repo's listing is. `matching` is the whole range's count, from the first page
 // of the first window; null before that page. windowsTotal grows when a window is split.
 export type RepoListingCounts = Omit<RepoListingProgress, "repo">;
@@ -232,9 +252,10 @@ const NOT_LISTED: RepoListingCounts = {
 
 // Lists one repo's PRs in the range, splitting windows past the 1000-result Search limit.
 // The parts of a split window are listed side by side; searchPage caps the requests in
-// flight. onProgress gets a snapshot before the first page, after each page and each split,
-// and once the repo is listed, with windowsDone equal to windowsTotal. The first window to
-// fail fails the listing with its error, without waiting for the windows still listing.
+// flight. onProgress gets a snapshot before the first page, after each page, split and
+// window listed, and once the repo is listed, with windowsDone equal to windowsTotal. A
+// window that fails fails the listing with its error once the other windows settle; with
+// listPullRequests, they send no further page.
 export async function listRepoPullRequests({
   repo,
   label,
@@ -271,6 +292,8 @@ export async function listRepoPullRequests({
 
     if (result.kind === "listed") {
       counts.windowsDone++;
+      // The last window's snapshot waits for the end one, which counts unique PRs.
+      if (counts.windowsDone < counts.windowsTotal) onProgress({ ...counts });
       return [result];
     }
 
@@ -279,8 +302,7 @@ export async function listRepoPullRequests({
     );
     counts.windowsTotal += result.parts.length - 1;
     onProgress({ ...counts });
-    const listedParts = await Promise.all(result.parts.map(listWindow));
-    return listedParts.flat();
+    return settleParts(result.parts.map(listWindow));
   }
 
   const windows = await listWindow({ ...range });
@@ -309,13 +331,6 @@ export async function listRepoPullRequests({
   return { prs, matchingPRs, isComplete, partialReasons };
 }
 
-// Thrown to a repo's listing when another repo's listing has failed.
-class ListingStopped extends Error {
-  constructor() {
-    super("Listing stopped: another repo failed.");
-  }
-}
-
 // Lists the PRs created in the range, every repo at once: the GitHub client caps the
 // requests in flight. Oversized windows are split to get past the 1000-result Search limit.
 // The result keeps the order of `repos`. A repo that fails fails the listing, with the error
@@ -340,14 +355,23 @@ export async function listPullRequests(
     `Starting listing across ${repos.length} repos in range ${dateRange.since}..${dateRange.until}${label ? ` [label:${label}]` : ""}`,
   );
 
-  // Once a repo fails, the listing has failed: the other repos send no further page, so the
-  // failed load stops spending quota and competing with a retry. Requests in flight settle.
-  let failed = false;
+  // Once a request fails, the listing has failed: no window of any repo sends a further
+  // page, even one already queued for a slot, so the failed load stops spending quota and
+  // competing with a retry. Requests in flight settle.
+  const stop = new AbortController();
+  const stopOn = (error: unknown) => {
+    if (!(error instanceof ListingStopped)) stop.abort(new ListingStopped());
+  };
   const searchPage: SearchPullRequestPage = (searchQuery, after) => {
-    if (failed) return Promise.reject(new ListingStopped());
+    if (stop.signal.aborted) return Promise.reject(new ListingStopped());
     const variables: Record<string, GraphqlVariable> = { searchQuery, first: SEARCH_PAGE_SIZE };
     if (after) variables.after = after;
-    return github.query<ListingResponse>(PR_LISTING_QUERY, variables, run);
+    return github
+      .query<ListingResponse>(PR_LISTING_QUERY, variables, run, stop.signal)
+      .catch((error: unknown) => {
+        stopOn(error);
+        throw error;
+      });
   };
 
   const reportRepo = createRepoProgress<RepoListingProgress>({
@@ -363,7 +387,7 @@ export async function listPullRequests(
         searchPage,
         onProgress: (counts) => reportRepo({ repo, ...counts }),
       }).catch((error: unknown) => {
-        if (!(error instanceof ListingStopped)) failed = true;
+        stopOn(error);
         throw error;
       }),
     ),

@@ -15,6 +15,11 @@ interface FakeRepo {
   // How long each request about this repo takes.
   delayMs: number;
   failListing?: boolean;
+  // Instead of `numbers`, this many PRs created each day, so a search over a date window
+  // matches that window's days only and a large range is split.
+  perDay?: number;
+  // A window, as "since..until", whose search fails.
+  failWindow?: string;
   failDetails?: boolean;
   // PRs with a second page of reviews.
   moreReviews?: number[];
@@ -61,6 +66,18 @@ function makeNode(repo: string, number: number, moreReviews: boolean): PullReque
   };
 }
 
+// Days from RANGE.since to a YYYY-MM-DD day.
+function dayIndex(day: string): number {
+  return (Date.parse(`${day}T00:00:00Z`) - Date.parse(`${RANGE.since}T00:00:00Z`)) / 86_400_000;
+}
+
+// The PRs created in a "since..until" window, perDay a day from RANGE.since, numbered from
+// 1 in creation order.
+function createdIn(window: string, perDay: number): number[] {
+  const [since, until] = window.split("..").map(dayIndex);
+  return range(since * perDay + 1, (until - since + 1) * perDay);
+}
+
 function fakeRepo(repo: string): FakeRepo {
   const found = fakeRepos.get(repo);
   if (!found) throw new Error(`Unexpected repo ${repo}`);
@@ -74,12 +91,17 @@ function answer(body: string): { repo: string; response: unknown } {
 
   if (typeof searchQuery === "string") {
     const repo = /repo:(\S+)/.exec(searchQuery)?.[1] ?? "";
-    const { numbers, failListing } = fakeRepo(repo);
-    searches.push(`${repo} ${typeof after === "string" ? after : "first"}`);
-    if (failListing) {
+    const window = /created:(\S+)/.exec(searchQuery)?.[1] ?? "";
+    const { failListing, perDay, failWindow } = fakeRepo(repo);
+    const numbers = perDay === undefined ? fakeRepo(repo).numbers : createdIn(window, perDay);
+    searches.push(
+      `${repo} ${perDay === undefined ? "" : `${window} `}${typeof after === "string" ? after : "first"}`,
+    );
+    if (failListing || window === failWindow) {
+      const where = failListing ? repo : `${repo} in ${window}`;
       return {
         repo,
-        response: { data: null, errors: [{ type: "INVALID", message: `Cannot search ${repo}` }] },
+        response: { data: null, errors: [{ type: "INVALID", message: `Cannot search ${where}` }] },
       };
     }
     const start = typeof after === "string" ? Number(after) : 0;
@@ -176,6 +198,10 @@ function setRepos(delays: number[], extra: Partial<Record<string, Partial<FakeRe
   );
 }
 
+function setFakeRepos(repos: Record<string, FakeRepo>) {
+  fakeRepos = new Map(Object.entries(repos));
+}
+
 beforeEach(() => {
   searches.length = 0;
   inFlight = 0;
@@ -262,10 +288,6 @@ describe("listPullRequests", () => {
 });
 
 describe("listPullRequests after a repo fails", () => {
-  function setFakeRepos(repos: Record<string, FakeRepo>) {
-    fakeRepos = new Map(Object.entries(repos));
-  }
-
   test("the other repos send no further page, and the listing rejects with the failure", async () => {
     // acme/a fails on its first page while acme/z, 3 pages long, is still on its first.
     setFakeRepos({
@@ -293,6 +315,57 @@ describe("listPullRequests after a repo fails", () => {
 
     expect(message).toBe("Cannot search acme/b");
     expect(searches.filter((search) => search.startsWith("acme/a"))).toEqual(["acme/a first"]);
+  });
+});
+
+describe("listPullRequests with a range split into more windows than slots", () => {
+  // 200 PRs a day over January: 6200 PRs, cut into 8 windows of about 800.
+  const FIRST_WINDOW = "2026-01-01..2026-01-03";
+  const SECOND_WINDOW = "2026-01-04..2026-01-07";
+
+  test("lists the windows side by side within the request limit, in date order", async () => {
+    setFakeRepos({ "acme/a": { numbers: [], perDay: 200, delayMs: 2 } });
+
+    const listing = await listPullRequests({ repos: ["acme/a"], ...RANGE }, createGitHubRun());
+
+    expect(listing.prs.map(({ number }) => number)).toEqual(range(1, 6200));
+    expect(listing.isComplete).toBe(true);
+    expect(peakInFlight).toBe(MAX_IN_FLIGHT);
+  });
+
+  test("a failing window stops the windows still queued for a slot", async () => {
+    setFakeRepos({
+      "acme/a": { numbers: [], perDay: 200, delayMs: 2, failWindow: FIRST_WINDOW },
+    });
+
+    const message = await rejection(
+      listPullRequests({ repos: ["acme/a"], ...RANGE }, createGitHubRun()),
+    );
+
+    // The listing rejects before the requests it already queued are done with.
+    await Bun.sleep(30);
+    expect(message).toBe(`Cannot search acme/a in ${FIRST_WINDOW}`);
+    // The range's first page, the 4 first pages that had a slot when the window failed, and
+    // at most one more: the failed request frees its slot just before the stop lands. The
+    // other windows still queued send nothing.
+    expect(searches.filter((search) => search.endsWith(" first")).length).toBeLessThanOrEqual(
+      1 + MAX_IN_FLIGHT + 1,
+    );
+  });
+
+  test("a window stopped by another repo's failure does not hide its own failure", async () => {
+    // acme/b fails while acme/a's first windows are in flight. The first window then asks
+    // for its next page and is stopped; the second answers just after with its own failure.
+    setFakeRepos({
+      "acme/a": { numbers: [], perDay: 200, delayMs: 10, failWindow: SECOND_WINDOW },
+      "acme/b": { numbers: [], delayMs: 15, failListing: true },
+    });
+
+    const message = await rejection(
+      listPullRequests({ repos: ["acme/a", "acme/b"], ...RANGE }, createGitHubRun()),
+    );
+
+    expect(message).toBe(`Cannot search acme/a in ${SECOND_WINDOW}`);
   });
 });
 

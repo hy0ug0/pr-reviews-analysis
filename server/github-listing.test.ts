@@ -68,8 +68,10 @@ test("reports the range total from the first page, each page across split window
     // The range was split after its first page; that page's PRs are listed again per half.
     { listed: 0, matching: 1500, windowsDone: 0, windowsTotal: 2 },
   ]);
-  // One snapshot per page kept: 2 in the first half, 1 in the second, then the end.
-  expect(progress).toHaveLength(2 + 3 + 1);
+  // One snapshot per page kept (2 in the first half, 1 in the second), one when the first
+  // half to finish is listed, then the end.
+  expect(progress).toHaveLength(2 + 3 + 1 + 1);
+  expect(progress).toContainEqual({ listed: 200, matching: 1500, windowsDone: 1, windowsTotal: 2 });
   // Every window listed: windowsDone reaches windowsTotal.
   expect(progress.at(-1)).toEqual({ listed: 200, matching: 1500, windowsDone: 2, windowsTotal: 2 });
   expectSteadyProgress(progress);
