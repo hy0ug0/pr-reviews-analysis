@@ -50,13 +50,30 @@ A line under the summary cards shows how many bot PRs and bot reviews were left 
 
 ## Several repositories
 
-With more than one repository in the query, a row of options above the summary cards picks which repository the results show. **All repositories** shows the whole query. A repository shows its own numbers in every section: summary cards, bot note, first response, review cycle, charts and reviewer table. The row stays at the top of the window while you scroll. A new query goes back to **All repositories**, and **Refresh** keeps the repository on screen.
+With more than one repository in the query, a row of options above the summary cards picks which repository the results show. **All repositories** shows the whole query. A repository shows its own numbers in every section: summary cards, bot note, first response, review cycle, charts, who reviews whom and reviewer table. The row stays at the top of the window while you scroll. A new query goes back to **All repositories**, and **Refresh** keeps the repository on screen.
 
 Under **All repositories**, a **By repository** table puts the repositories side by side: PRs, reviews, reviewers, reviews per PR, first response p50 and p90, and time to merge p50. A repository that the query lists but where no PR matched shows zeros, and one where bots opened every PR says so. The total row is the whole query. PRs and reviews add up to it, but reviewers may not: someone who reviews in two repositories counts once in the total. With fewer than 5 PRs that got a response, the p90 is dimmed.
 
 Each repository's numbers come from the same analysis run on that repository's PRs alone, with the same team filter and bot setting. The coverage warning and the cache line describe the whole query, so they stay above the row.
 
 The API result carries the split in `byRepo`: one entry per queried repository, lowercased, with that repository's metrics in the same shape as the top-level ones.
+
+## Time to first response
+
+The **Time to first response** section measures how long a PR waits for someone other than its author. The clock starts when the PR is ready for review: at creation, or at the first ready-for-review event of a PR opened as a draft. It stops at the first response:
+
+- A response is a submitted review in any state, a dismissed one included, or a conversation comment.
+- Reviews and comments by the PR author or by deleted accounts never count. Those by bots count only with **Include bots** ticked. With a team filter, only team members' responses count.
+- A response before the PR was ready for review, or after it closed, doesn't count.
+
+The section shows the p50, p75 and p90, a histogram from under an hour to over 7 days, and the median per week. A PR counts in the week its clock started, from Monday, UTC. Like the other metrics, it covers every PR opened in the date range, whatever the date of the response.
+
+A bar next to the percentiles shows the PRs that have no time:
+
+- **still waiting**: open PRs without a response.
+- **closed without response**: PRs merged or closed before any response.
+- **drafts left out**: PRs still in draft, or closed without leaving draft.
+- **undetermined**: some of the PR's comments or reviews weren't fetched, and one of them may be the first response. The server fetches the first 10 comments of each PR, so a PR whose first 10 comments all come from its author or from bots ends up here unless a review came earlier.
 
 ## Reviewer response time
 
