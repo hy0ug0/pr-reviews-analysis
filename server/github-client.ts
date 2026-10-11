@@ -63,8 +63,8 @@ export interface GitHubClientOptions {
 
 export interface GitHubClient {
   // Resolves with the query's data; any GraphQL error rejects. Once `signal` aborts, no
-  // further attempt is sent, retries included, and the query rejects with its reason. An
-  // attempt already sent is not cut short.
+  // further attempt is sent, a backoff or rate-limit wait ends, and the query rejects with
+  // its reason. An attempt already sent is not cut short.
   query<T>(
     query: string,
     variables?: GraphqlVariables,
@@ -332,6 +332,19 @@ export function createGitHubClient({
 
   // Up to GRAPHQL_MAX_ATTEMPTS attempts on transient failures. A 401 refreshes the token
   // and tries once more without using up an attempt; a second 401 means the login is bad.
+  // Waits like `sleep`, but rejects with the abort reason as soon as `signal` aborts.
+  function wait(ms: number, signal: AbortSignal | undefined): Promise<void> {
+    if (!signal) return sleep(ms);
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      sleep(ms)
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener("abort", onAbort));
+    });
+  }
+
   async function request<T>(
     query: string,
     variables: GraphqlVariables,
@@ -366,13 +379,13 @@ export function createGitHubClient({
           if (outcome.waitMs === undefined) {
             const backoffMs = 200 * 2 ** (failures - 1);
             log.warn(`Retrying GraphQL request in ${backoffMs}ms`);
-            await sleep(backoffMs);
+            await wait(backoffMs, signal);
           } else {
             log.warn(`Waiting ${Math.ceil(outcome.waitMs / 1000)} s for the GitHub rate limit`);
             // The run shows the wait in its progress; plain backoff is too short to mention.
             const endWait = run?.rateLimited(now() + outcome.waitMs);
             try {
-              await sleep(outcome.waitMs);
+              await wait(outcome.waitMs, signal);
             } finally {
               endWait?.();
             }

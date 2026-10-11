@@ -356,8 +356,10 @@ export async function listPullRequests(
   );
 
   // Once a request fails, the listing has failed: no window of any repo sends a further
-  // page, even one already queued for a slot, so the failed load stops spending quota and
-  // competing with a retry. Requests in flight settle.
+  // page, even one queued for a slot or waiting to retry, so the failed load stops spending
+  // quota and competing with a retry. Requests in flight settle. A slot freed in the same
+  // moment as the failure can still pass to a queued page before the stop lands, so up to
+  // one request per slot may follow it.
   const stop = new AbortController();
   const stopOn = (error: unknown) => {
     if (!(error instanceof ListingStopped)) stop.abort(new ListingStopped());

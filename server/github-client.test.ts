@@ -684,6 +684,39 @@ describe("concurrency limit", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test("an abort ends a rate-limit wait at once", async () => {
+    const stop = new AbortController();
+    const reason = new Error("stopped");
+    let calls = 0;
+    const client = createGitHubClient({
+      fetch: () => {
+        calls++;
+        return Promise.resolve(
+          json({ message: "Too many requests" }, { status: 429, headers: { "Retry-After": "60" } }),
+        );
+      },
+      tokenProvider: { get: () => Promise.resolve(TOKEN), refresh: () => Promise.resolve(TOKEN) },
+      // A wait that never ends on its own.
+      sleep: () => new Promise(() => {}),
+      now: () => NOW,
+    });
+    const run = createGitHubRun();
+    const waiting = Promise.withResolvers<void>();
+    run.rateLimited = () => {
+      waiting.resolve();
+      return () => {};
+    };
+
+    const failure = client
+      .query<Data>(QUERY, {}, run, stop.signal)
+      .catch((error: unknown) => error);
+    await waiting.promise;
+    stop.abort(reason);
+
+    expect(await failure).toBe(reason);
+    expect(calls).toBe(1);
+  });
+
   // With one slot, a request that kept it would leave the next one waiting forever.
   test("frees the slot when a request fails, times out or cannot connect", async () => {
     const { client } = fakeGitHub(
