@@ -101,9 +101,7 @@ describe("analysisReducer", () => {
       kind: "progressed",
       progress: {
         phase: "listing",
-        repos: [
-          { repo: "acme/a", listed: 0, matching: null, page: 0, windowsDone: 0, windowsTotal: 1 },
-        ],
+        repos: [{ repo: "acme/a", listed: 0, matching: null, windowsDone: 0, windowsTotal: 1 }],
       },
     });
     const halfFetched = analysisReducer(listingStarted, {
@@ -282,9 +280,7 @@ describe("repo selection", () => {
 describe("progressPanelDueAt", () => {
   const listingOnGitHub: AnalysisProgress = {
     phase: "listing",
-    repos: [
-      { repo: "acme/a", listed: 0, matching: null, page: 0, windowsDone: 0, windowsTotal: 1 },
-    ],
+    repos: [{ repo: "acme/a", listed: 0, matching: null, windowsDone: 0, windowsTotal: 1 }],
   };
 
   test("a full cache hit that ends at 310 ms never reaches the panel", () => {

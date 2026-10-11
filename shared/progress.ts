@@ -107,20 +107,16 @@ function listingCounts({
   return [`${listed.toLocaleString()} of ${pluralize(matching, "PR")}${suffix}`];
 }
 
-function windowWhere({ windowsDone, windowsTotal }: RepoListingProgress): string[] {
-  return windowsTotal > 1 ? [`window ${windowsDone + 1} of ${windowsTotal}`] : [];
-}
-
-// Where one repo's listing is: its page and date window, until it is listed.
+// Where one repo's listing is, until it is listed: with its range split into date windows,
+// listed side by side, how many of them are done.
 function listingWhere(repo: RepoListingProgress): string[] {
-  if (isListed(repo)) return [];
-  return [...(repo.page > 0 ? [`page ${repo.page}`] : []), ...windowWhere(repo)];
+  if (isListed(repo) || repo.windowsTotal === 1) return [];
+  return [`${repo.windowsDone} of ${repo.windowsTotal} windows done`];
 }
 
-// A repo's line leaves the page out: it changes too often to read across several lines.
 function listingLine(repo: RepoListingProgress): RepoLine {
   if (isListed(repo)) return { repo: repo.repo, detail: pluralize(repo.listed, "PR"), done: true };
-  const [detail = ""] = listingCounts({ ...repo, where: windowWhere(repo) });
+  const [detail = ""] = listingCounts({ ...repo, where: listingWhere(repo) });
   return { repo: repo.repo, detail, done: false };
 }
 

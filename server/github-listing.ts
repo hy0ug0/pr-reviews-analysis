@@ -151,8 +151,8 @@ export type SearchPullRequestPage = (
   after: string | null,
 ) => Promise<ListingResponse>;
 
-// Called after each page kept in a window, with the PRs listed in it so far.
-type OnWindowPage = (page: { listed: number; issueCount: number; page: number }) => void;
+// Called after each page kept in a window, with that page's PR count.
+type OnWindowPage = (page: { prs: number; issueCount: number }) => void;
 
 async function listWindowPullRequests(
   repo: string,
@@ -188,7 +188,7 @@ async function listWindowPullRequests(
   log.info(
     `Window ${window.since}..${window.until}: listed page 1 (${prs.length}/${issueCount} PRs)`,
   );
-  onPage({ listed: prs.length, issueCount, page: pagesFetched });
+  onPage({ prs: firstPage.search.nodes.length, issueCount });
 
   while (hasNextPage) {
     if (pagesFetched >= MAX_SEARCH_PAGES) {
@@ -210,12 +210,14 @@ async function listWindowPullRequests(
     log.info(
       `Window ${window.since}..${window.until}: listed page ${pagesFetched} (${prs.length}/${issueCount} PRs)`,
     );
-    onPage({ listed: prs.length, issueCount, page: pagesFetched });
+    onPage({ prs: page.search.nodes.length, issueCount });
   }
 
   log.info(`Completed window ${window.since}..${window.until}: ${prs.length} PRs listed`);
   return { kind: "listed", issueCount, prs, isComplete, partialReasons };
 }
+
+type ListedWindow = Extract<ListWindowResult, { kind: "listed" }>;
 
 // How far one repo's listing is. `matching` is the whole range's count, from the first page
 // of the first window; null before that page. windowsTotal grows when a window is split.
@@ -224,14 +226,15 @@ export type RepoListingCounts = Omit<RepoListingProgress, "repo">;
 const NOT_LISTED: RepoListingCounts = {
   listed: 0,
   matching: null,
-  page: 0,
   windowsDone: 0,
   windowsTotal: 1,
 };
 
 // Lists one repo's PRs in the range, splitting windows past the 1000-result Search limit.
-// onProgress gets a snapshot before the first page, after each page, and once the repo is
-// listed, with windowsDone equal to windowsTotal.
+// The parts of a split window are listed side by side; searchPage caps the requests in
+// flight. onProgress gets a snapshot before the first page, after each page and each split,
+// and once the repo is listed, with windowsDone equal to windowsTotal. The first window to
+// fail fails the listing with its error, without waiting for the windows still listing.
 export async function listRepoPullRequests({
   repo,
   label,
@@ -246,75 +249,59 @@ export async function listRepoPullRequests({
   onProgress?: (progress: RepoListingCounts) => void;
 }): Promise<PullRequestListing> {
   log.info(`Starting repo listing for ${repo} in range ${range.since}..${range.until}`);
-  const windowsToList: DateWindow[] = [{ ...range }];
+  // `listed` adds up each window's pages as they come; the end snapshot counts unique PRs.
+  const counts: RepoListingCounts = { ...NOT_LISTED };
+  onProgress({ ...counts });
+
+  // Lists a window, or the parts it is cut into, and resolves with the listed windows in
+  // date order. The range is the first window, so its count is the first one known.
+  async function listWindow(window: DateWindow): Promise<ListedWindow[]> {
+    const result = await listWindowPullRequests(
+      repo,
+      label,
+      window,
+      searchPage,
+      ({ prs, issueCount }) => {
+        counts.matching ??= issueCount;
+        counts.listed += prs;
+        onProgress({ ...counts });
+      },
+    );
+    counts.matching ??= result.issueCount;
+
+    if (result.kind === "listed") {
+      counts.windowsDone++;
+      return [result];
+    }
+
+    log.info(
+      `Window ${window.since}..${window.until} has ${result.issueCount} matches; splitting into ${result.parts.length} windows`,
+    );
+    counts.windowsTotal += result.parts.length - 1;
+    onProgress({ ...counts });
+    const listedParts = await Promise.all(result.parts.map(listWindow));
+    return listedParts.flat();
+  }
+
+  const windows = await listWindow({ ...range });
+
   const partialReasons: string[] = [];
   const seen = new Set<number>();
   const prs: ListedPullRequest[] = [];
   let matchingPRs = 0;
   let isComplete = true;
-  let rangeMatching: number | null = null;
-  let windowsDone = 0;
-  let lastPage = 0;
-  // The window being listed counts too, so the total includes it.
-  const windowsTotal = () => windowsDone + windowsToList.length + 1;
-  onProgress(NOT_LISTED);
+  for (const window of windows) {
+    matchingPRs += window.issueCount;
+    if (!window.isComplete) isComplete = false;
+    partialReasons.push(...window.partialReasons);
 
-  while (windowsToList.length > 0) {
-    const window = windowsToList.pop()!;
-    const windowResult = await listWindowPullRequests(
-      repo,
-      label,
-      window,
-      searchPage,
-      ({ listed, issueCount, page }) => {
-        rangeMatching ??= issueCount;
-        lastPage = page;
-        onProgress({
-          listed: seen.size + listed,
-          matching: rangeMatching,
-          page,
-          windowsDone,
-          windowsTotal: windowsTotal(),
-        });
-      },
-    );
-    rangeMatching ??= windowResult.issueCount;
-
-    if (windowResult.kind === "split") {
-      const { parts } = windowResult;
-      log.info(
-        `Window ${window.since}..${window.until} has ${windowResult.issueCount} matches; splitting into ${parts.length} windows`,
-      );
-      // Pushed last part first, so the parts are listed in date order.
-      windowsToList.push(...[...parts].reverse());
-      onProgress({
-        listed: seen.size,
-        matching: rangeMatching,
-        page: 0,
-        windowsDone,
-        windowsTotal: windowsTotal() - 1,
-      });
-      continue;
-    }
-
-    matchingPRs += windowResult.issueCount;
-    if (!windowResult.isComplete) isComplete = false;
-    partialReasons.push(...windowResult.partialReasons);
-
-    for (const pr of windowResult.prs) {
+    for (const pr of window.prs) {
       if (seen.has(pr.number)) continue;
       seen.add(pr.number);
       prs.push({ repo, number: pr.number, updatedAt: pr.updatedAt });
     }
-    windowsDone++;
   }
-  onProgress({
-    listed: seen.size,
-    matching: rangeMatching,
-    page: lastPage,
-    windowsDone,
-    windowsTotal: windowsDone,
-  });
+  onProgress({ ...counts, listed: prs.length });
 
   log.info(
     `Completed repo listing for ${repo}: ${prs.length} PRs listed, matching ${matchingPRs}, complete=${isComplete}`,

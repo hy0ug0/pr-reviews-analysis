@@ -40,6 +40,17 @@ const searchPage: SearchPullRequestPage = async (searchQuery, after) => {
   return response;
 };
 
+// Windows listed side by side report in whatever order their pages arrive, so the tests check
+// what holds in any order: listed never goes down, and the repo is listed only at the end.
+function expectSteadyProgress(progress: RepoListingCounts[]) {
+  for (const [index, snapshot] of progress.entries()) {
+    if (index > 0) expect(snapshot.listed).toBeGreaterThanOrEqual(progress[index - 1].listed);
+    if (index < progress.length - 1) {
+      expect(snapshot.windowsDone).toBeLessThan(snapshot.windowsTotal);
+    }
+  }
+}
+
 test("reports the range total from the first page, each page across split windows, then the end", async () => {
   const progress: RepoListingCounts[] = [];
 
@@ -52,16 +63,16 @@ test("reports the range total from the first page, each page across split window
   });
 
   expect(listing.prs).toHaveLength(200);
-  expect(progress).toEqual([
-    { listed: 0, matching: null, page: 0, windowsDone: 0, windowsTotal: 1 },
+  expect(progress.slice(0, 2)).toEqual([
+    { listed: 0, matching: null, windowsDone: 0, windowsTotal: 1 },
     // The range was split after its first page; that page's PRs are listed again per half.
-    { listed: 0, matching: 1500, page: 0, windowsDone: 0, windowsTotal: 2 },
-    { listed: 100, matching: 1500, page: 1, windowsDone: 0, windowsTotal: 2 },
-    { listed: 150, matching: 1500, page: 2, windowsDone: 0, windowsTotal: 2 },
-    { listed: 200, matching: 1500, page: 1, windowsDone: 1, windowsTotal: 2 },
-    // Every window listed: windowsDone reaches windowsTotal.
-    { listed: 200, matching: 1500, page: 1, windowsDone: 2, windowsTotal: 2 },
+    { listed: 0, matching: 1500, windowsDone: 0, windowsTotal: 2 },
   ]);
+  // One snapshot per page kept: 2 in the first half, 1 in the second, then the end.
+  expect(progress).toHaveLength(2 + 3 + 1);
+  // Every window listed: windowsDone reaches windowsTotal.
+  expect(progress.at(-1)).toEqual({ listed: 200, matching: 1500, windowsDone: 2, windowsTotal: 2 });
+  expectSteadyProgress(progress);
 });
 
 // A fake Search over PRs created on given days: each window's issueCount and pages come
@@ -125,14 +136,12 @@ test("cuts an oversized window once into parts sized from its count, listed in d
   expect(progress[1]).toEqual({
     listed: 0,
     matching: 3000,
-    page: 0,
     windowsDone: 0,
     windowsTotal: 4,
   });
   expect(progress.at(-1)).toEqual({
     listed: 3000,
     matching: 3000,
-    page: 9,
     windowsDone: 4,
     windowsTotal: 4,
   });
@@ -166,18 +175,12 @@ test("cuts a part again when its days hold more PRs than the even spread assumed
   expect(listing.prs).toHaveLength(1300);
   expect(listing.matchingPRs).toBe(1300);
   expect(listing.isComplete).toBe(true);
-  // The second part is replaced by its 2 days: 3 windows in all, 1 of them done.
-  expect(progress).toContainEqual({
-    listed: 200,
-    matching: 1300,
-    page: 0,
-    windowsDone: 1,
-    windowsTotal: 3,
-  });
+  // The second part is replaced by its 2 days: 3 windows in all.
+  expect(progress.map(({ windowsTotal }) => windowsTotal)).toContain(3);
+  expectSteadyProgress(progress);
   expect(progress.at(-1)).toEqual({
     listed: 1300,
     matching: 1300,
-    page: 10,
     windowsDone: 3,
     windowsTotal: 3,
   });
@@ -226,4 +229,56 @@ test("lists the first 1000 PRs of a single day past the limit and reports it par
     `A single-day window (2026-01-01) in ${REPO} has more than 1000 matching PRs and cannot be split further.`,
     `GitHub Search limit reached for ${REPO} (2026-01-01..2026-01-01); only first 1000 PRs were accessible in this window.`,
   ]);
+});
+
+test("lists the parts of a split window side by side", async () => {
+  // 3000 PRs over 10 days make 4 parts. Each request waits for a timer, so the requests in
+  // flight show how many windows are listed at once.
+  const days = Object.fromEntries(
+    Array.from({ length: 10 }, (_, index) => [
+      `2026-01-${String(index + 1).padStart(2, "0")}`,
+      300,
+    ]),
+  );
+  const { search } = searchByDay(days);
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const slowSearch: SearchPullRequestPage = async (searchQuery, after) => {
+    inFlight++;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    inFlight--;
+    return search(searchQuery, after);
+  };
+
+  const listing = await listRepoPullRequests({
+    repo: REPO,
+    label: undefined,
+    range: { since: "2026-01-01", until: "2026-01-10" },
+    searchPage: slowSearch,
+  });
+
+  expect(maxInFlight).toBe(4);
+  expect(listing.prs.map(({ number }) => number)).toEqual(prs(1, 3000).map(({ number }) => number));
+});
+
+test("fails with the error of a failing window", async () => {
+  const { search } = searchByDay({
+    "2026-01-01": 600,
+    "2026-01-02": 600,
+    "2026-01-03": 600,
+  });
+  const failingSearch: SearchPullRequestPage = (searchQuery, after) =>
+    searchQuery.includes("created:2026-01-02..2026-01-02")
+      ? Promise.reject(new Error("GitHub said no"))
+      : search(searchQuery, after);
+
+  const failure = await listRepoPullRequests({
+    repo: REPO,
+    label: undefined,
+    range: { since: "2026-01-01", until: "2026-01-03" },
+    searchPage: failingSearch,
+  }).catch((error: unknown) => error);
+
+  expect(failure).toEqual(new Error("GitHub said no"));
 });

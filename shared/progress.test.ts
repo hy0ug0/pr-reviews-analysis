@@ -12,7 +12,7 @@ type ListingRepo = Listing["repos"][number];
 type FetchingRepo = Fetching["repos"][number];
 
 function listingRepo(repo: string, counts: Partial<ListingRepo> = {}): ListingRepo {
-  return { repo, listed: 0, matching: null, page: 0, windowsDone: 0, windowsTotal: 1, ...counts };
+  return { repo, listed: 0, matching: null, windowsDone: 0, windowsTotal: 1, ...counts };
 }
 
 function fetchingRepo(repo: string, counts: Partial<FetchingRepo> = {}): FetchingRepo {
@@ -52,13 +52,12 @@ describe("describeProgress with one repo", () => {
     expect(view.repos).toEqual([]);
   });
 
-  test("listing with a total is determinate and names the page and window", () => {
+  test("listing with a total is determinate and counts the windows done", () => {
     const view = describeProgress(
       listing(
         listingRepo("vitejs/vite", {
           listed: 300,
           matching: 1200,
-          page: 3,
           windowsDone: 1,
           windowsTotal: 3,
         }),
@@ -66,10 +65,7 @@ describe("describeProgress with one repo", () => {
     );
 
     expect(view.fraction).toBeCloseTo(0.15 * 0.25);
-    expect(plain(view.details)).toEqual([
-      "vitejs/vite",
-      "300 of 1,200 PRs (page 3, window 2 of 3)",
-    ]);
+    expect(plain(view.details)).toEqual(["vitejs/vite", "300 of 1,200 PRs (1 of 3 windows done)"]);
   });
 
   test("a listed repo fills the step, even short of its total past the Search limit", () => {
@@ -78,7 +74,7 @@ describe("describeProgress with one repo", () => {
         listingRepo("vitejs/vite", {
           listed: 1000,
           matching: 1200,
-          page: 10,
+
           windowsDone: 2,
           windowsTotal: 2,
         }),
@@ -133,7 +129,7 @@ describe("describeProgress with several repos", () => {
   test("listing shows the repo count and one line per repo, indeterminate until every total is known", () => {
     const view = describeProgress(
       listing(
-        listingRepo("colinhacks/zod", { listed: 100, matching: 286, page: 1 }),
+        listingRepo("colinhacks/zod", { listed: 100, matching: 286 }),
         listingRepo("honojs/hono"),
       ),
     );
@@ -150,12 +146,11 @@ describe("describeProgress with several repos", () => {
     const view = describeProgress(
       listing(
         // Listed, but 50 short of its total past the Search limit.
-        listingRepo("colinhacks/zod", { listed: 250, matching: 300, page: 3, windowsDone: 1 }),
-        listingRepo("honojs/hono", { listed: 100, matching: 400, page: 1 }),
+        listingRepo("colinhacks/zod", { listed: 250, matching: 300, windowsDone: 1 }),
+        listingRepo("honojs/hono", { listed: 100, matching: 400 }),
         listingRepo("oven-sh/bun", {
           listed: 500,
           matching: 2300,
-          page: 5,
           windowsDone: 1,
           windowsTotal: 3,
         }),
@@ -167,7 +162,7 @@ describe("describeProgress with several repos", () => {
     expect(view.repos.map((line) => [line.repo, plain([line.detail])[0], line.done])).toEqual([
       ["colinhacks/zod", "250 PRs", true],
       ["honojs/hono", "100 of 400 PRs", false],
-      ["oven-sh/bun", "500 of 2,300 PRs (window 2 of 3)", false],
+      ["oven-sh/bun", "500 of 2,300 PRs (1 of 3 windows done)", false],
     ]);
   });
 

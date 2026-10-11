@@ -160,9 +160,7 @@ describe("analysisProgressSchema", () => {
   } satisfies AnalysisProgress;
   const listing = {
     phase: "listing",
-    repos: [
-      { repo: "honojs/hono", listed: 0, matching: null, page: 0, windowsDone: 0, windowsTotal: 1 },
-    ],
+    repos: [{ repo: "honojs/hono", listed: 0, matching: null, windowsDone: 0, windowsTotal: 1 }],
   } satisfies AnalysisProgress;
   const until = "2026-10-10T12:00:30.000Z";
 

@@ -7,8 +7,8 @@ const T0 = Date.UTC(2026, 9, 10, 12, 0, 0);
 const listing = {
   phase: "listing",
   repos: [
-    { repo: "honojs/hono", listed: 100, matching: 300, page: 1, windowsDone: 0, windowsTotal: 1 },
-    { repo: "oven-sh/bun", listed: 0, matching: null, page: 0, windowsDone: 0, windowsTotal: 1 },
+    { repo: "honojs/hono", listed: 100, matching: 300, windowsDone: 0, windowsTotal: 1 },
+    { repo: "oven-sh/bun", listed: 0, matching: null, windowsDone: 0, windowsTotal: 1 },
   ],
 } satisfies AnalysisProgress;
 

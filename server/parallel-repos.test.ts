@@ -234,7 +234,7 @@ describe("listPullRequests", () => {
         repo,
         listed: 0,
         matching: null,
-        page: 0,
+
         windowsDone: 0,
         windowsTotal: 1,
       })),
@@ -242,9 +242,9 @@ describe("listPullRequests", () => {
     expect(snapshots.at(-1)).toEqual({
       phase: "listing",
       repos: [
-        { repo: "acme/a", listed: 250, matching: 250, page: 3, windowsDone: 1, windowsTotal: 1 },
-        { repo: "acme/b", listed: 30, matching: 30, page: 1, windowsDone: 1, windowsTotal: 1 },
-        { repo: "acme/c", listed: 120, matching: 120, page: 2, windowsDone: 1, windowsTotal: 1 },
+        { repo: "acme/a", listed: 250, matching: 250, windowsDone: 1, windowsTotal: 1 },
+        { repo: "acme/b", listed: 30, matching: 30, windowsDone: 1, windowsTotal: 1 },
+        { repo: "acme/c", listed: 120, matching: 120, windowsDone: 1, windowsTotal: 1 },
       ],
     });
     // The last repo to finish is the first one, which a sequential listing finished first.

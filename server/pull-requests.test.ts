@@ -735,7 +735,7 @@ describe("loadPullRequests progress", () => {
     listMock.mockImplementationOnce(async (listQuery, run) => {
       run.report({
         phase: "listing",
-        repos: [{ repo: REPO, listed: 0, matching: 1, page: 1, windowsDone: 0, windowsTotal: 1 }],
+        repos: [{ repo: REPO, listed: 0, matching: 1, windowsDone: 0, windowsTotal: 1 }],
       });
       await listingGate;
       return {
