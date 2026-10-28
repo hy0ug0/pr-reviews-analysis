@@ -28,6 +28,8 @@ cp .env.example .env
 ## Environment Variables (`.env`)
 
 - `PORT`: API server port (default `3000`)
+- `HOST`: interface the server listens on (default `127.0.0.1`, this machine only). The API acts with your GitHub token, so `0.0.0.0` lends it to anyone on your network. The server answers only requests addressed to `localhost`, `127.0.0.1`, `[::1]`, `HOST` or the proxy name, plus any IP address when `HOST` is `0.0.0.0`: a web page that points its own domain at your machine is refused.
+- `PORTLESS_URL`: set by [portless](https://github.com/vercel-labs/portless), not by hand. Its host name is answered like `localhost` when it ends in `.localhost`.
 - `DEFAULT_REPOS`: pre-filled repositories (`owner/repo`, comma-separated)
 - `DEFAULT_LABEL`: pre-filled label filter
 - `DEFAULT_TEAM`: pre-filled team members (comma-separated GitHub handles)
@@ -133,8 +135,12 @@ bun run dev
 - App: [http://localhost:5173](http://localhost:5173)
 - API: [http://localhost:3000](http://localhost:3000)
 
-For non-watch mode:
+Without watch mode, build the app and let the server serve it with the API:
 
 ```bash
 bun start
 ```
+
+- App and API: [http://localhost:3000](http://localhost:3000)
+
+Behind [portless](https://github.com/vercel-labs/portless), run `portless pr-reviews bun start` and open `pr-reviews.localhost`. portless picks the port.
