@@ -7,6 +7,11 @@ const log = createLogger("config");
 
 export interface Config {
   port: number;
+  // Interface the server listens on. Loopback by default: the API acts with your GitHub token.
+  host: string;
+  // Host name of the proxy URL in front of the server (pr-reviews.localhost), answered like
+  // localhost. Set by portless through PORTLESS_URL.
+  proxyHostname: string | null;
   defaultRepos: string[];
   defaultLabel: string;
   defaultTeam: string[];
@@ -70,6 +75,8 @@ const repoListSetting = listSetting.transform((repos) =>
 const envSchema = z
   .object({
     PORT: integerSetting("PORT", { min: 0, max: 65_535, fallback: 3000 }),
+    HOST: textSetting,
+    PORTLESS_URL: textSetting,
     DEFAULT_REPOS: repoListSetting,
     DEFAULT_LABEL: textSetting,
     DEFAULT_TEAM: listSetting,
@@ -86,6 +93,8 @@ const envSchema = z
   })
   .transform((env): Config => ({
     port: env.PORT,
+    host: env.HOST || "127.0.0.1",
+    proxyHostname: URL.parse(env.PORTLESS_URL)?.hostname ?? null,
     defaultRepos: env.DEFAULT_REPOS,
     defaultLabel: env.DEFAULT_LABEL,
     defaultTeam: env.DEFAULT_TEAM,

@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { zValidator } from "@hono/zod-validator";
@@ -10,9 +11,11 @@ import {
 import { analyze } from "./analysis/analyzer.ts";
 import { analyzeByRepo } from "./analysis/by-repo.ts";
 import { CACHE_NAMESPACES } from "./cache-namespaces.ts";
+import { serveClient } from "./client.ts";
 import { sweepCacheDir } from "./cache-sweep.ts";
 import { config } from "./config.ts";
 import { githubToken } from "./github-token.ts";
+import { hostGuard } from "./host-guard.ts";
 import { createLogger } from "./logger.ts";
 import type { AnalysisProgress, AnalysisResult, AnalyzeParams } from "../shared/types.ts";
 import { describeCacheUsage } from "../shared/data-source.ts";
@@ -23,6 +26,8 @@ import { loadPullRequests, normalizeRepos } from "./pull-requests.ts";
 const log = createLogger("server");
 
 export const app = new Hono();
+
+app.use("*", hostGuard(config.host, config.proxyHostname));
 
 interface BunServerWithTimeout {
   timeout(req: Request, seconds: number): void;
@@ -194,6 +199,8 @@ app.get(
   },
 );
 
+app.get("*", serveClient(join(import.meta.dir, "../dist/client")));
+
 // Tests import this module for `app`; only a real start reads the gh token and logs the
 // settings. Every request would fail without a token, so the server stops here instead.
 if (import.meta.main) {
@@ -216,10 +223,11 @@ if (import.meta.main) {
       ? "Analyze request idle timeout disabled"
       : `Analyze request idle timeout set to ${config.analyzeIdleTimeoutSeconds}s`,
   );
-  log.info(`PR Reviews Analysis running at http://localhost:${config.port}`);
+  log.info(`PR Reviews Analysis running at http://${config.host}:${config.port}`);
 }
 
 export default {
+  hostname: config.host,
   port: config.port,
   fetch(req: Request, server?: BunServerWithTimeout) {
     if (server && new URL(req.url).pathname === "/api/analyze") {

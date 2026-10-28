@@ -7,6 +7,8 @@ describe("parseConfig", () => {
   test("uses the defaults when nothing is set", () => {
     expect(parseConfig({}, CWD)).toEqual({
       port: 3000,
+      host: "127.0.0.1",
+      proxyHostname: null,
       defaultRepos: [],
       defaultLabel: "",
       defaultTeam: [],
@@ -23,6 +25,8 @@ describe("parseConfig", () => {
       parseConfig(
         {
           PORT: "3115",
+          HOST: " 0.0.0.0 ",
+          PORTLESS_URL: "https://pr-reviews.localhost",
           DEFAULT_REPOS: "acme/widgets, acme/gadgets,",
           DEFAULT_LABEL: " bug ",
           DEFAULT_TEAM: "alice,,bob",
@@ -36,6 +40,8 @@ describe("parseConfig", () => {
       ),
     ).toEqual({
       port: 3115,
+      host: "0.0.0.0",
+      proxyHostname: "pr-reviews.localhost",
       defaultRepos: ["acme/widgets", "acme/gadgets"],
       defaultLabel: "bug",
       defaultTeam: ["alice", "bob"],
