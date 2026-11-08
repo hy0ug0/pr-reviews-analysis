@@ -50,7 +50,7 @@
     "oxlint-tsgolint": "7.0.2004",
     "tailwindcss": "4.3.4",
     "typescript": "7.0.2",
-    "vite": "8.3.5"
+    "vite": "8.3.6"
   },
   "packageManager": "bun@1.4.2"
 }
