@@ -125,7 +125,10 @@ export function RepoSwitcher({ byRepo, totalPRs, selected, onSelect }: RepoSwitc
   const end = edges.end ? FADE : "0px";
 
   return (
-    <fieldset className="sticky top-3 z-10 min-w-0 rounded-xl border border-gray-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <fieldset
+      data-export-exclude
+      className="sticky top-3 z-10 min-w-0 rounded-xl border border-gray-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"
+    >
       <legend className="sr-only">Repository shown</legend>
       <div
         ref={rowRef}

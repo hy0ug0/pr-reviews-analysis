@@ -109,6 +109,21 @@ The **Who reviews whom** matrix crosses PR authors (rows) with reviewers (column
 - Rows and columns are ordered by their total. The top 15 of each show by default and the rest fold into an **others** row and column. **Show all** lists everyone.
 - The shade follows the square root of the count, scaled to the busiest author and reviewer pair. Folded and total cells aren't shaded. Every cell prints its count, and **Export CSV** downloads the whole matrix.
 
+## Sharing and remembering a query
+
+Each analysis puts the form's filters in the page URL: repositories, label, time range (with the dates of a custom range), team members and the bots setting. Copy the URL to share the query. Opening such a link fills the form and runs the analysis right away, when the form would accept it; otherwise it only fills the form. **Refresh from GitHub** is never part of the URL, so a shared link reads the cache like any other query.
+
+The browser also remembers the last query it ran, in local storage. The next visit starts the form from it instead of the `DEFAULT_*` variables, which only fill a form that has nothing to remember yet. Clearing the site data forgets it.
+
+## Export
+
+A bar above the results names the query and exports it:
+
+- **Copy JSON** and **Download JSON** give the whole analysis as JSON, for an LLM or a script: `exportedAt`, the `query` (repositories, label, team, the resolved date range and the bots setting) and the full `result` with its `byRepo` entries. Copy falls back to a download when the clipboard is unavailable.
+- **Download PNG** saves an image of the results area as shown on the page, in the current light or dark mode and at twice the screen resolution, to post to the team. The bar's query line is part of the image; the buttons, the repository switcher and the **Refresh**, **Export CSV** and **Show all** controls are not. With a repository selected in the switcher, the image shows that repository and the query line names it.
+
+The file name carries the repositories and the date range, such as `pr-reviews-acme-api-2026-10-01-2026-11-09.png`.
+
 ## Cache
 
 The server caches GitHub data on disk in two tiers:

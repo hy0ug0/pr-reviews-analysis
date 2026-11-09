@@ -1,8 +1,10 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { AppDefaults } from "./types";
 import { fetchDefaults } from "./api";
 import { useAnalysis } from "./useAnalysis";
 import { shownResult } from "./analysisState";
+import { parseQuery, rememberedQuery } from "./queryPersistence";
+import { analyzeFormSchema } from "../../shared/schemas";
 import { AnalysisProgressPanel } from "./components/AnalysisProgressPanel";
 import { Header } from "./components/Header";
 import { AnalyzeForm } from "./components/AnalyzeForm";
@@ -18,6 +20,7 @@ import { RepoSwitcher } from "./components/RepoSwitcher";
 import { repoOptionId } from "./components/repoOption";
 import { RepoComparison } from "./components/RepoComparison";
 import { ReviewMatrixSection } from "./components/ReviewMatrixSection";
+import { ExportActions } from "./components/ExportActions";
 
 function subscribeToDarkMode(callback: () => void) {
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -64,10 +67,24 @@ export default function App() {
   const hasRepoSwitcher = byRepo.length > 1;
   const showProgress = useReached(progressPanelDueAt);
   const [defaults, setDefaults] = useState<AppDefaults | undefined>(undefined);
+  // A query in the URL wins over the remembered one; with neither, the form takes the
+  // server defaults.
+  const [urlQuery] = useState(() => parseQuery(window.location.search));
+  const [initialValues] = useState(() => urlQuery ?? rememberedQuery() ?? undefined);
+  // The results area the PNG export captures.
+  const resultsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
   }, [isDark]);
+
+  // A shared link shows its results without a click. A link that would not pass the form's
+  // own check only fills the form, so it neither reaches the server nor replaces the
+  // remembered query. Under StrictMode the first run is aborted by useAnalysis's cleanup and
+  // the second one stands, so no guard is needed.
+  useEffect(() => {
+    if (urlQuery && analyzeFormSchema.safeParse(urlQuery).success) void analyze(urlQuery);
+  }, []);
 
   useEffect(() => {
     fetchDefaults()
@@ -95,7 +112,12 @@ export default function App() {
     <div className="bg-slate-50 dark:bg-slate-950 text-gray-900 dark:text-slate-100 min-h-screen font-sans">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Header />
-        <AnalyzeForm onSubmit={analyze} loading={loading} defaults={defaults} />
+        <AnalyzeForm
+          onSubmit={analyze}
+          loading={loading}
+          defaults={defaults}
+          initialValues={initialValues}
+        />
 
         {showProgress && startedAt !== null && (
           <AnalysisProgressPanel progress={progress} startedAt={startedAt} />
@@ -125,7 +147,8 @@ export default function App() {
         )}
 
         {shown && result && !loading && (
-          <div className="space-y-8">
+          <div ref={resultsRef} className="space-y-8">
+            <ExportActions shown={shown} captureRef={resultsRef} />
             {showTruncatedWarning && (
               <div className="bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-900 rounded-xl p-4">
                 <div className="flex items-start gap-3">

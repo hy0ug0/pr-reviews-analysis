@@ -66,6 +66,7 @@ export function DataSourceNote({
                   type="button"
                   onClick={onRefresh}
                   disabled={loading}
+                  data-export-exclude
                   aria-label="Refresh from GitHub"
                   title="Search the PR list on GitHub again and fetch the PRs that changed"
                   className="rounded px-1 font-medium text-indigo-600 hover:text-indigo-700 hover:underline underline-offset-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-indigo-400 dark:hover:text-indigo-300"
@@ -77,20 +78,6 @@ export function DataSourceNote({
           </ul>
         </div>
       </div>
-      {line.split && (
-        // Spans the strip's full inner width, so the proportion reads against the same
-        // baseline whatever the text length.
-        <div className="mt-2 flex h-1 gap-0.5 overflow-hidden rounded-full" aria-hidden="true">
-          <div
-            className="min-w-0.5 rounded-full bg-slate-300 dark:bg-slate-600"
-            style={{ flexGrow: line.split.cached }}
-          />
-          <div
-            className="min-w-0.5 rounded-full bg-indigo-500 dark:bg-indigo-400"
-            style={{ flexGrow: line.split.fetched }}
-          />
-        </div>
-      )}
     </div>
   );
 }

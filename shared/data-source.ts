@@ -41,8 +41,6 @@ export interface DataSourceLineItem {
 
 export interface DataSourceLine {
   items: DataSourceLineItem[];
-  // PR counts for the cached/fetched bar; null unless the run mixed both.
-  split: { cached: number; fetched: number } | null;
   // Refreshing only searches the PR list on GitHub again (unchanged PRs are still reused),
   // so it can change the result only when the list came from the cache.
   canRefresh: boolean;
@@ -88,7 +86,7 @@ export function describeDataSource({
       listing === "cache"
         ? [item("No PRs matched"), item(`list cached ${ago(listedAt)}`, listingTitle), requests]
         : [item("No PRs matched, cache not used"), requests];
-    return { items, split: null, canRefresh };
+    return { items, canRefresh };
   }
 
   const oldest = dataSource.oldestReusedCachedAt;
@@ -106,7 +104,7 @@ export function describeDataSource({
       item(requests.text),
     ];
     if (dataSource.skippedCache) items.unshift(item("Cache skipped"));
-    return { items, split: null, canRefresh };
+    return { items, canRefresh };
   }
 
   if (fetchedPRs === 0) {
@@ -116,7 +114,7 @@ export function describeDataSource({
     if (oldest !== null) items.push(item(`cached ${ago(oldest)}`, oldestTitle));
     if (listedFromGitHub) items.push(listedFromGitHub);
     items.push(requests);
-    return { items, split: null, canRefresh };
+    return { items, canRefresh };
   }
 
   const items = [
@@ -128,5 +126,5 @@ export function describeDataSource({
   if (listedFromGitHub) items.push(listedFromGitHub);
   items.push(requests);
   if (oldest !== null) items.push(item(`oldest data ${ago(oldest)}`, oldestTitle));
-  return { items, split: { cached: reusedPRs, fetched: fetchedPRs }, canRefresh };
+  return { items, canRefresh };
 }

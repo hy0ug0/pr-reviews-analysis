@@ -32,6 +32,7 @@
     "chart.js": "^4.6.1",
     "consola": "^3.4.2",
     "hono": "^4.13.16",
+    "html-to-image": "^1.11.13",
     "react": "^19.3.1",
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.3.1",
