@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pluralize } from "../../../shared/format";
+import { downloadBlob } from "../download";
 import {
   buildMatrixView,
   describeCell,
@@ -74,13 +75,10 @@ function Avatar({ login, size }: { login: string; size: number }) {
 }
 
 function downloadCsv(cells: readonly ReviewMatrixCell[], metric: MatrixMetric) {
-  const blob = new Blob([toCsv(cells, metric)], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `review-matrix-${metric}-${new Date().toISOString().split("T")[0]}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(
+    new Blob([toCsv(cells, metric)], { type: "text/csv" }),
+    `review-matrix-${metric}-${new Date().toISOString().split("T")[0]}.csv`,
+  );
 }
 
 function MetricToggle({
@@ -557,6 +555,7 @@ export function ReviewMatrixSection({ cells, teamMembers, includeBots }: ReviewM
             <button
               type="button"
               onClick={() => downloadCsv(cells, metric)}
+              data-export-exclude
               className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-gray-600 dark:text-slate-300 bg-gray-100 dark:bg-slate-800 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
             >
               <svg
@@ -620,6 +619,7 @@ export function ReviewMatrixSection({ cells, teamMembers, includeBots }: ReviewM
                 <button
                   type="button"
                   onClick={() => setShowAll(!showAll)}
+                  data-export-exclude
                   className="rounded-sm font-medium text-indigo-600 hover:text-indigo-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300"
                 >
                   {showAll

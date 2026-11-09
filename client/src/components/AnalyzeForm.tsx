@@ -6,20 +6,17 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import { analyzeFormSchema, timeRangePresets } from "../../../shared/schemas";
+import { analyzeFormSchema } from "../../../shared/schemas";
 import { fetchSuggestions } from "../api";
-import type { AnalyzeFormValues, AppDefaults, AppSuggestion, TimeRangePreset } from "../types";
-
-const timeRangeSet: ReadonlySet<string> = new Set(timeRangePresets);
-
-function isTimeRangePreset(value: string): value is TimeRangePreset {
-  return timeRangeSet.has(value);
-}
+import { isTimeRangePreset } from "../queryPersistence";
+import type { AnalyzeFormValues, AppDefaults, AppSuggestion } from "../types";
 
 interface AnalyzeFormProps {
   onSubmit: (values: AnalyzeFormValues) => void;
   loading: boolean;
   defaults?: AppDefaults;
+  // A query from the URL or the last visit. It wins over the server defaults.
+  initialValues?: AnalyzeFormValues;
 }
 
 const baseInputClass =
@@ -250,21 +247,24 @@ function AutocompleteInput({
   );
 }
 
-export function AnalyzeForm({ onSubmit, loading, defaults }: AnalyzeFormProps) {
-  const [form, setForm] = useState<AnalyzeFormValues>({
-    repo: "",
-    label: "",
-    timeRange: "month",
-    since: "",
-    until: "",
-    team: "",
-    skipCache: false,
-    includeBots: false,
-  });
+export function AnalyzeForm({ onSubmit, loading, defaults, initialValues }: AnalyzeFormProps) {
+  const [form, setForm] = useState<AnalyzeFormValues>(
+    () =>
+      initialValues ?? {
+        repo: "",
+        label: "",
+        timeRange: "month",
+        since: "",
+        until: "",
+        team: "",
+        skipCache: false,
+        includeBots: false,
+      },
+  );
   const [errors, setErrors] = useState<Partial<Record<keyof AnalyzeFormValues, string>>>({});
 
   useEffect(() => {
-    if (defaults) {
+    if (defaults && !initialValues) {
       setForm((prev) => ({
         ...prev,
         repo: defaults.repos || prev.repo,
@@ -272,7 +272,7 @@ export function AnalyzeForm({ onSubmit, loading, defaults }: AnalyzeFormProps) {
         team: defaults.team || prev.team,
       }));
     }
-  }, [defaults]);
+  }, [defaults, initialValues]);
 
   const update = <K extends keyof AnalyzeFormValues>(field: K, value: AnalyzeFormValues[K]) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -305,7 +305,10 @@ export function AnalyzeForm({ onSubmit, loading, defaults }: AnalyzeFormProps) {
 
   return (
     <div className="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-gray-200 dark:border-slate-800 p-6 mb-8">
-      <form onSubmit={handleSubmit} noValidate>
+      {/* autoComplete="off" stops the browser from restoring field values on reload or
+          back-forward over React's state, which left "Custom Range" selected without its
+          date inputs. The persisted query restores the form instead. */}
+      <form onSubmit={handleSubmit} noValidate autoComplete="off">
         {/* Locked while an analysis runs, and left in place so it keeps showing the query
             behind the run. Collapsing it would flash on cached runs, which end before the
             progress panel appears. min-w-0 lets the grid shrink below the fieldset's default

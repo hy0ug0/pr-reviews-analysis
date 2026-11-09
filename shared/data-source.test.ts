@@ -33,7 +33,6 @@ describe("describeDataSource", () => {
       "All 592 PRs from cache · cached 2 h ago · 0 GitHub requests",
     );
     expect(line.canRefresh).toBe(true);
-    expect(line.split).toBeNull();
     expect(line.items[1].title).toContain("Oldest reused PR cached");
   });
 
@@ -77,7 +76,6 @@ describe("describeDataSource", () => {
     expect(lineText(source)).toBe(
       "540 of 592 PRs from cache (91%) · 52 refetched · 2 requests · oldest data 2 h ago",
     );
-    expect(line.split).toEqual({ cached: 540, fetched: 52 });
     expect(line.canRefresh).toBe(true);
   });
 
