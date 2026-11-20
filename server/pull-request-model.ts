@@ -12,8 +12,8 @@ import { COMMENTS_PAGE_SIZE } from "../shared/types";
 // Bump whenever PullRequest changes shape, so PR cache entries written in the old shape are
 // never read. Version 2 PRs had no draft, timeline or comment fields; version 3 had no repo
 // and kept review bodies; version 4 had no author __typename; version 5 had no review
-// request events.
-export const PULL_REQUEST_CACHE_VERSION = 6;
+// request events; version 6 had no assignees.
+export const PULL_REQUEST_CACHE_VERSION = 7;
 
 export const INLINE_REVIEW_PAGE_SIZE = 50;
 
@@ -22,6 +22,9 @@ export const INLINE_REVIEW_PAGE_SIZE = 50;
 // cost nor its time. A PR with more is marked partial, never cached.
 // The connection's totalCount ignores itemTypes, so only hasNextPage tells.
 export const REVIEW_REQUEST_EVENTS_PAGE_SIZE = 50;
+
+// GitHub allows at most 10 assignees per PR, so one page holds them all.
+const ASSIGNEES_PAGE_SIZE = 10;
 
 // The review fields every query that returns reviews selects.
 export const REVIEW_FIELDS = `
@@ -56,6 +59,7 @@ fragment PullRequestFields on PullRequest {
   closedAt
   isDraft
   author { login __typename }
+  assignees(first: ${ASSIGNEES_PAGE_SIZE}) { nodes { login } }
   timelineItems(itemTypes: [READY_FOR_REVIEW_EVENT], first: 1) {
     nodes {
       ... on ReadyForReviewEvent { createdAt }
@@ -166,6 +170,8 @@ const pullRequestFields = {
 // reviews and its first ready-for-review event, if any.
 export const pullRequestNodeSchema = z.object({
   ...pullRequestFields,
+  // Users only: GitHub types assignees as a UserConnection.
+  assignees: z.object({ nodes: connectionNodes(z.object({ login: z.string() })) }),
   // Items of other types come back as {}; the filter only returns ReadyForReviewEvent.
   timelineItems: z.object({
     nodes: connectionNodes(z.object({ createdAt: z.string().optional() })),
@@ -186,6 +192,8 @@ export const pullRequestSchema = z.object({
   // Normalized to lowercase, as listed.
   repo: z.string(),
   ...pullRequestFields,
+  // Assignee logins, as GitHub spells them.
+  assignees: z.array(z.string()),
   // When the PR first left draft; null if it never was a draft.
   readyForReviewAt: z.string().nullable(),
   // Every review, unless fetching the pages after the inline one failed: then hasNextPage is
@@ -253,7 +261,7 @@ function toReviewRequestEvent(node: ReviewRequestEventNode): ReviewRequestEvent 
   };
 }
 
-// Drops the review cursor, flattens the ready-for-review event and normalizes the review
+// Drops the review cursor, flattens the assignees and the ready-for-review event and normalizes the review
 // request events so the result matches PullRequest. `repo` comes from the listing, since the
 // fragment does not select it.
 export function toPullRequest({
@@ -268,10 +276,18 @@ export function toPullRequest({
   // Whether GitHub has reviews that `reviews` lacks.
   hasMoreReviews: boolean;
 }): PullRequest {
-  const { reviews: _connection, timelineItems, comments, reviewRequestEvents, ...fields } = node;
+  const {
+    reviews: _connection,
+    assignees,
+    timelineItems,
+    comments,
+    reviewRequestEvents,
+    ...fields
+  } = node;
   return {
     repo,
     ...fields,
+    assignees: assignees.nodes.map((assignee) => assignee.login),
     readyForReviewAt: timelineItems.nodes.find((item) => item.createdAt)?.createdAt ?? null,
     reviews: { pageInfo: { hasNextPage: hasMoreReviews }, nodes: reviews },
     comments,

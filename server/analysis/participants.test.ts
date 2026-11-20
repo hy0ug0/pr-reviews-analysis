@@ -1,13 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import type { Actor } from "../../shared/types.ts";
-import { isBot, isExcludedBotPR, isParticipant, toParticipantRules } from "./participants.ts";
+import {
+  agentPROwners,
+  isBot,
+  isExcludedBotPR,
+  isParticipant,
+  toParticipantRules,
+} from "./participants.ts";
 
 function user(login: string): Actor {
   return { login, __typename: "User" };
 }
 
 const APP: Actor = { login: "copilot", __typename: "Bot" };
-const PR = { author: user("alice") };
+const PR = { author: user("alice"), assignees: [] };
 const NO_TEAM = toParticipantRules({});
 const WITH_BOTS = toParticipantRules({ includeBots: true });
 
@@ -19,6 +25,12 @@ describe("isBot", () => {
     expect(isBot(user("Renovate[BOT]"), rules)).toBe(true);
     expect(isBot(user("ci-user"), rules)).toBe(true);
     expect(isBot(user("bob"), rules)).toBe(false);
+  });
+
+  test("an agent login is a bot, even on a user account", () => {
+    expect(isBot(user("Coding-Agent"), toParticipantRules({ agentLogins: ["coding-agent"] }))).toBe(
+      true,
+    );
   });
 
   test("a login on the list is a bot whatever casing GitHub returns", () => {
@@ -59,7 +71,7 @@ describe("isParticipant", () => {
   });
 
   test("with bots included, still rejects a bot reviewing its own PR", () => {
-    const botPR = { author: user("renovate[bot]") };
+    const botPR = { author: user("renovate[bot]"), assignees: [] };
 
     expect(isParticipant(user("renovate[bot]"), botPR, WITH_BOTS)).toBe(false);
   });
@@ -76,7 +88,7 @@ describe("isParticipant", () => {
   });
 
   test("counts anyone but bots on a PR without an author", () => {
-    expect(isParticipant(user("alice"), { author: null }, NO_TEAM)).toBe(true);
+    expect(isParticipant(user("alice"), { author: null, assignees: [] }, NO_TEAM)).toBe(true);
   });
 
   test("with a team filter, counts only team members, matching case-insensitively", () => {
@@ -95,17 +107,53 @@ describe("isExcludedBotPR", () => {
   const rules = toParticipantRules({ botLogins: ["ci-user"] });
 
   test("excludes PRs opened by any kind of bot", () => {
-    expect(isExcludedBotPR({ author: APP }, rules)).toBe(true);
-    expect(isExcludedBotPR({ author: user("dependabot[bot]") }, rules)).toBe(true);
-    expect(isExcludedBotPR({ author: user("CI-USER") }, rules)).toBe(true);
+    expect(isExcludedBotPR({ author: APP, assignees: [] }, rules)).toBe(true);
+    expect(isExcludedBotPR({ author: user("dependabot[bot]"), assignees: [] }, rules)).toBe(true);
+    expect(isExcludedBotPR({ author: user("CI-USER"), assignees: [] }, rules)).toBe(true);
   });
 
   test("keeps PRs opened by people or by deleted accounts", () => {
     expect(isExcludedBotPR(PR, rules)).toBe(false);
-    expect(isExcludedBotPR({ author: null }, rules)).toBe(false);
+    expect(isExcludedBotPR({ author: null, assignees: [] }, rules)).toBe(false);
   });
 
   test("keeps bot PRs when bots are included", () => {
-    expect(isExcludedBotPR({ author: APP }, WITH_BOTS)).toBe(false);
+    expect(isExcludedBotPR({ author: APP, assignees: [] }, WITH_BOTS)).toBe(false);
+  });
+});
+
+describe("PRs opened by an agent", () => {
+  const AGENT: Actor = { login: "Coding-Agent", __typename: "Bot" };
+  const rules = toParticipantRules({ agentLogins: ["coding-agent"], botLogins: ["ci-user"] });
+  const agentPR = { author: AGENT, assignees: ["Alice", "ci-user", "renovate[bot]"] };
+
+  test("their owners are the human assignees, lowercased", () => {
+    expect(agentPROwners(agentPR, rules)).toEqual(["alice"]);
+  });
+
+  test("a bot outside AGENT_LOGINS has no owners, whatever its assignees", () => {
+    expect(agentPROwners({ author: APP, assignees: ["alice"] }, rules)).toEqual([]);
+  });
+
+  test("a PR opened by a person has no owners beyond its author", () => {
+    expect(agentPROwners({ author: user("bob"), assignees: ["alice"] }, rules)).toEqual([]);
+  });
+
+  test("are kept with a human assignee and excluded without one", () => {
+    expect(isExcludedBotPR(agentPR, rules)).toBe(false);
+    expect(isExcludedBotPR({ author: AGENT, assignees: [] }, rules)).toBe(true);
+    expect(isExcludedBotPR({ author: AGENT, assignees: ["ci-user"] }, rules)).toBe(true);
+  });
+
+  test("their owners don't count as participants, anyone else does", () => {
+    expect(isParticipant(user("ALICE"), agentPR, rules)).toBe(false);
+    expect(isParticipant(user("bob"), agentPR, rules)).toBe(true);
+  });
+
+  test("with bots included, their owners still don't count", () => {
+    const withBots = { ...rules, includeBots: true };
+
+    expect(isParticipant(user("alice"), agentPR, withBots)).toBe(false);
+    expect(isParticipant(AGENT, agentPR, withBots)).toBe(false);
   });
 });

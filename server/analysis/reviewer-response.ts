@@ -4,6 +4,7 @@ import {
   isParticipant,
   toParticipantRules,
   type ParticipantOptions,
+  type ParticipantPR,
   type ParticipantRules,
 } from "./participants.ts";
 import { roundedPercentile } from "./stats.ts";
@@ -37,13 +38,13 @@ type TimelineItem =
   | { kind: "requested" | "removed"; time: number; target: RequestTarget }
   | { kind: "response"; time: number; responder: Actor };
 
-// Requests to the PR author, to bots and, with a team filter, to people outside it never get
+// Requests to the PR author (or the people an agent opened it for), to bots and, with a team filter, to people outside it never get
 // a response that counts, so they are skipped. With bots included, a requested bot is a
 // reviewer like any other and its responses give samples, as everywhere else. A hidden reviewer
 // (null) can't be credited to anyone.
 function toRequestTarget(
   reviewer: RequestedReviewer | null,
-  pr: Pick<PullRequest, "author">,
+  pr: ParticipantPR,
   rules: ParticipantRules,
 ): RequestTarget | null {
   if (reviewer === null) return null;

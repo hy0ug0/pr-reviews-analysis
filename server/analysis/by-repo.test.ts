@@ -42,6 +42,7 @@ function makePR({
       nodes: reviewers.map((reviewer) => makeReview(reviewer)),
     },
     comments: { pageInfo: { hasNextPage: false }, nodes: [] },
+    assignees: [],
     reviewRequests: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }

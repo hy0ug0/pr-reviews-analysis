@@ -50,6 +50,7 @@ function makePR({
     author: author === null ? null : { login: author, __typename: authorType },
     reviews: { pageInfo: { hasNextPage: false }, nodes: reviews },
     comments: { pageInfo: { hasNextPage: false }, nodes: [] },
+    assignees: [],
     reviewRequests: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }

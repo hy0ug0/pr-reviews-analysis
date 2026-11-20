@@ -40,6 +40,7 @@ function makeNode(number: number, hasMoreReviews = false): PullRequestNode {
       nodes: [makeReview("alice")],
     },
     comments: { pageInfo: { hasNextPage: false }, nodes: [] },
+    assignees: { nodes: [] },
     reviewRequestEvents: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }
@@ -165,12 +166,18 @@ describe("fetchPullRequestsInBatches", () => {
       fetchContinuation: noContinuation,
     });
 
-    const { timelineItems: _timeline, reviewRequestEvents: _events, ...node } = makeNode(1);
+    const {
+      assignees: _assignees,
+      timelineItems: _timeline,
+      reviewRequestEvents: _events,
+      ...node
+    } = makeNode(1);
     expect(item).toEqual({
       kind: "complete",
       pullRequest: {
         repo: REPO,
         ...node,
+        assignees: [],
         readyForReviewAt: null,
         reviews: { pageInfo: { hasNextPage: false }, nodes: [makeReview("alice")] },
         reviewRequests: { pageInfo: { hasNextPage: false }, nodes: [] },

@@ -36,6 +36,7 @@ function rawNode(overrides: Record<string, unknown> = {}): Record<string, unknow
     timelineItems: { nodes: [] },
     reviews: { pageInfo: { hasNextPage: false, endCursor: "cursor-1" }, nodes: [review] },
     comments,
+    assignees: { nodes: [] },
     reviewRequestEvents: { pageInfo: { hasNextPage: false }, nodes: [] },
     ...overrides,
   };
@@ -136,6 +137,7 @@ describe("toPullRequest", () => {
       "closedAt",
       "isDraft",
       "author",
+      "assignees",
       "readyForReviewAt",
       "reviews",
       "comments",
@@ -163,6 +165,14 @@ describe("toPullRequest", () => {
     });
 
     expect(pullRequest.reviews.nodes).toEqual([review]);
+  });
+
+  test("keeps the assignees' logins", () => {
+    const node = parseNode({ assignees: { nodes: [{ login: "erin" }, null, { login: "Frank" }] } });
+
+    const pullRequest = toPullRequest({ repo: REPO, node, reviews: [], hasMoreReviews: false });
+
+    expect(pullRequest.assignees).toEqual(["erin", "Frank"]);
   });
 
   test("takes readyForReviewAt from the first ready-for-review event", () => {

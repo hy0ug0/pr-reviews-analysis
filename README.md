@@ -34,6 +34,7 @@ cp .env.example .env
 - `DEFAULT_LABEL`: pre-filled label filter
 - `DEFAULT_TEAM`: pre-filled team members (comma-separated GitHub handles)
 - `BOT_LOGINS`: bots that use regular user accounts (comma-separated GitHub logins, case-insensitive), such as `ci-user,release-bot`. See [Bots](#bots).
+- `AGENT_LOGINS`: coding agents that open PRs for the person who runs them (comma-separated GitHub logins, case-insensitive), such as `cursor`. See [Agent PRs](#agent-prs).
 - `CACHE_TTL_HOURS`: how long, in hours, to reuse the list of PRs matching a query (default `6`). The list key covers repositories, label and date range. The team filter applies after the cache, so changing the team reuses the cached data.
 - `PR_CACHE_TTL_DAYS`: how long, in days, to keep each PR's data and reviews (default `30`). A cached PR is reused while its `updatedAt` on GitHub is unchanged, whatever query listed it.
 - `CACHE_DIR`: cache directory path (default `.cache/pr-reviews-analysis`)
@@ -49,6 +50,17 @@ By default the analysis leaves bots out. A bot is a GitHub App (such as Renovate
 - Reviews and comments by a bot count neither as reviews nor as a first response.
 
 A line under the summary cards shows how many bot PRs and bot reviews were left out. The **Total PRs** card counts the PRs the metrics use, so it leaves bot PRs out too. Tick **Include bots** in the form to count them like anyone else. The filter applies after the cache, so switching it reuses the cached data.
+
+### Agent PRs
+
+Some coding agents open the PR themselves, under their own bot account, and assign it to the person who started them. That person then reviews it, as if it were their own. List these agents in `AGENT_LOGINS` to count their PRs as the work of their assignees:
+
+- An agent's PR with at least one assignee who is not a bot counts in every metric, even with bots left out. Its assignees count as its authors: their reviews and comments count neither as reviews nor as a first response, and review requests to them give no reviewer response sample.
+- An agent's PR without such an assignee is a bot PR like any other.
+- The **Who reviews whom** matrix keeps the agent as the row: an agent's PR may have several assignees.
+- A login in `AGENT_LOGINS` is a bot, like one in `BOT_LOGINS`.
+
+A bot outside `AGENT_LOGINS` keeps the rules above, even when its PRs have assignees, as Renovate's can. An agent that posts with your own account, such as a CLI agent that runs `gh`, needs no setting: its reviews and comments are yours.
 
 ## Several repositories
 
