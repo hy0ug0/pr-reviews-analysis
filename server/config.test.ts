@@ -13,6 +13,7 @@ describe("parseConfig", () => {
       defaultLabel: "",
       defaultTeam: [],
       botLogins: [],
+      agentLogins: [],
       cacheDir: "/srv/app/.cache/pr-reviews-analysis",
       cacheTtlHours: 6,
       prCacheTtlDays: 30,
@@ -31,6 +32,7 @@ describe("parseConfig", () => {
           DEFAULT_LABEL: " bug ",
           DEFAULT_TEAM: "alice,,bob",
           BOT_LOGINS: " ci-user, Release-Bot,",
+          AGENT_LOGINS: "coding-agent, Other-Agent",
           CACHE_DIR: "tmp/cache",
           CACHE_TTL_HOURS: "12",
           PR_CACHE_TTL_DAYS: "7",
@@ -47,6 +49,7 @@ describe("parseConfig", () => {
       defaultTeam: ["alice", "bob"],
       // Kept as written; the participant rules compare logins case-insensitively.
       botLogins: ["ci-user", "Release-Bot"],
+      agentLogins: ["coding-agent", "Other-Agent"],
       cacheDir: "/srv/app/tmp/cache",
       cacheTtlHours: 12,
       prCacheTtlDays: 7,

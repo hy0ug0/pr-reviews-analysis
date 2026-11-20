@@ -16,11 +16,17 @@ import {
 } from "./participants.ts";
 
 // The request parameters plus the server settings the analysis applies.
-export type AnalyzeOptions = AnalyzeParams & Pick<ParticipantOptions, "botLogins">;
+export type AnalyzeOptions = AnalyzeParams & Pick<ParticipantOptions, "botLogins" | "agentLogins">;
 
 export function analyze(loadedPRs: PullRequest[], options: AnalyzeOptions): AnalysisMetrics {
   const reviewerMap = new Map<string, ReviewerStats>();
-  const rules = toParticipantRules(options);
+  const participantOptions: ParticipantOptions = {
+    teamMembers: options.teamMembers,
+    includeBots: options.includeBots,
+    botLogins: options.botLogins,
+    agentLogins: options.agentLogins,
+  };
+  const rules = toParticipantRules(participantOptions);
   // Dropped before any metric, so bot PRs count toward no total, average or response time.
   const prs = loadedPRs.filter((pr) => !isExcludedBotPR(pr, rules));
   // With bots excluded, a review these rules accept was skipped only for being by a bot.
@@ -84,9 +90,7 @@ export function analyze(loadedPRs: PullRequest[], options: AnalyzeOptions): Anal
   // requests by comment gets no row.
   const responses = summarizeReviewerResponses({
     prs,
-    teamMembers: options.teamMembers,
-    includeBots: options.includeBots,
-    botLogins: options.botLogins,
+    ...participantOptions,
   });
   // Most reviews first, then by login, so the order doesn't depend on the PR order.
   // localeCompare orders letters regardless of case, as the review matrix does.
@@ -106,23 +110,17 @@ export function analyze(loadedPRs: PullRequest[], options: AnalyzeOptions): Anal
     reviewerStats,
     firstResponse: summarizeFirstResponse({
       prs,
-      teamMembers: options.teamMembers,
-      includeBots: options.includeBots,
-      botLogins: options.botLogins,
+      ...participantOptions,
       since: options.since,
       until: options.until,
     }),
     reviewCycle: summarizeReviewCycle({
       prs,
-      teamMembers: options.teamMembers,
-      includeBots: options.includeBots,
-      botLogins: options.botLogins,
+      ...participantOptions,
     }),
     reviewMatrix: summarizeReviewMatrix({
       prs,
-      teamMembers: options.teamMembers,
-      includeBots: options.includeBots,
-      botLogins: options.botLogins,
+      ...participantOptions,
       since: options.since,
       until: options.until,
     }),

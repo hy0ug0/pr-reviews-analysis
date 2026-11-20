@@ -129,6 +129,7 @@ function makePR(number: number, updatedAt = "2026-03-20T09:00:00Z"): PullRequest
     isDraft: false,
     readyForReviewAt: "2026-03-02T09:00:00Z",
     author: { login: "alice", __typename: "User" },
+    assignees: ["alice"],
     reviews: {
       pageInfo: { hasNextPage: false },
       nodes: [
@@ -227,7 +228,7 @@ describe("cache keys", () => {
       /^pull-request-listing-v3-[0-9a-f]{64}$/,
     );
     expect(buildPullRequestCacheKey({ repo: REPO, number: 1 })).toMatch(
-      /^pull-request-v6-[0-9a-f]{64}$/,
+      /^pull-request-v7-[0-9a-f]{64}$/,
     );
   });
 

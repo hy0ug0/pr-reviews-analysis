@@ -62,6 +62,7 @@ function makeNode(repo: string, number: number, moreReviews: boolean): PullReque
       ],
     },
     comments: { pageInfo: { hasNextPage: false }, nodes: [] },
+    assignees: { nodes: [] },
     reviewRequestEvents: { pageInfo: { hasNextPage: false }, nodes: [] },
   };
 }

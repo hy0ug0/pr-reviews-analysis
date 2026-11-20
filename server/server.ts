@@ -96,7 +96,7 @@ async function runAnalysis(
   const { prs, matchingPRs, analyzedPRs, isComplete, partialReasons } = fetchResult;
   log.info(`Analyzing ${analyzedPRs} PRs (total matching: ${matchingPRs})`);
   progress.onProgress?.({ phase: "analyzing", prs: analyzedPRs });
-  const options = { ...params, botLogins: config.botLogins };
+  const options = { ...params, botLogins: config.botLogins, agentLogins: config.agentLogins };
 
   return {
     matchingPRs,

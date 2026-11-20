@@ -26,11 +26,13 @@ function makePR({
   number = 1,
   author = "alice",
   authorType = "User",
+  assignees = [],
   reviews = [],
 }: {
   number?: number;
   author?: string | null;
   authorType?: string;
+  assignees?: string[];
   reviews?: PRReview[];
 }): PullRequest {
   return {
@@ -46,6 +48,7 @@ function makePR({
     isDraft: false,
     readyForReviewAt: null,
     author: author === null ? null : { login: author, __typename: authorType },
+    assignees,
     reviews: { pageInfo: { hasNextPage: false }, nodes: reviews },
     comments: { pageInfo: { hasNextPage: false }, nodes: [] },
     reviewRequests: { pageInfo: { hasNextPage: false }, nodes: [] },
@@ -477,6 +480,98 @@ describe("bots", () => {
 
   test("with a team filter, does not report bot reviews the filter skips anyway", () => {
     expect(run(prs, { teamMembers: ["bob"] }).excludedBots).toEqual({ prs: 2, reviews: 0 });
+  });
+});
+
+describe("agent PRs", () => {
+  const options = { agentLogins: ["coding-agent"] };
+  const agentPR = makePR({
+    number: 1,
+    author: "coding-agent",
+    authorType: "Bot",
+    assignees: ["alice"],
+    reviews: [makeReview({ by: "alice" }), makeReview({ by: "bob" })],
+  });
+
+  test("counts an agent PR with an assignee, without its owner's reviews", () => {
+    const result = run([agentPR], options);
+
+    expect(result.countedPRs).toBe(1);
+    expect(logins(result)).toEqual(["bob"]);
+    expect(result.totalReviews).toBe(1);
+    expect(result.excludedBots).toEqual({ prs: 0, reviews: 0 });
+    expect(result.reviewMatrix).toEqual([
+      expect.objectContaining({ author: "coding-agent", reviewer: "bob" }),
+    ]);
+  });
+
+  test("leaves its owner out of first response, reviewer response and the review cycle", () => {
+    const HOUR = 60 * 60 * 1000;
+    const pr: PullRequest = {
+      ...makePR({
+        author: "coding-agent",
+        authorType: "Bot",
+        assignees: ["alice"],
+        reviews: [
+          makeReview({ by: "alice", submittedAt: "2026-03-01T10:00:00Z" }),
+          makeReview({ by: "bob", submittedAt: "2026-03-01T13:00:00Z" }),
+        ],
+      }),
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          { author: { login: "alice", __typename: "User" }, createdAt: "2026-03-01T09:30:00Z" },
+        ],
+      },
+      reviewRequests: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          {
+            kind: "requested",
+            createdAt: "2026-03-01T09:00:00Z",
+            reviewer: { kind: "user", login: "alice" },
+          },
+          {
+            kind: "requested",
+            createdAt: "2026-03-01T09:00:00Z",
+            reviewer: { kind: "user", login: "bob" },
+          },
+        ],
+      },
+    };
+
+    const result = run([pr], options);
+
+    expect(result.firstResponse).toMatchObject({ respondedPRs: 1, p50Ms: 4 * HOUR });
+    expect(result.reviewerStats).toEqual([
+      expect.objectContaining({ login: "bob", responseSamples: 1, responseP50Ms: 4 * HOUR }),
+    ]);
+    expect(result.reviewCycle.timeToApproval).toMatchObject({ approvedPRs: 1, p50Ms: 0 });
+  });
+
+  test("with bots included, still leaves out its owner's reviews", () => {
+    expect(logins(run([agentPR], { ...options, includeBots: true }))).toEqual(["bob"]);
+  });
+
+  test("drops an agent PR without an assignee, and bot PRs outside AGENT_LOGINS", () => {
+    const unassigned = makePR({
+      number: 2,
+      author: "coding-agent",
+      authorType: "Bot",
+      reviews: [makeReview({ by: "bob" })],
+    });
+    const assignedRenovate = makePR({
+      number: 3,
+      author: "renovate",
+      authorType: "Bot",
+      assignees: ["alice"],
+      reviews: [makeReview({ by: "bob" })],
+    });
+
+    const result = run([unassigned, assignedRenovate], options);
+
+    expect(result.countedPRs).toBe(0);
+    expect(result.excludedBots).toEqual({ prs: 2, reviews: 0 });
   });
 });
 
